@@ -1,0 +1,151 @@
+{
+  "entities": {
+    "edc": {
+      "title": "EDC Device",
+      "description": "Represents a single Electronic Data Capture device.",
+      "type": "object",
+      "properties": {
+        "sn": { "type": "string", "description": "Serial Number" },
+        "tid": { "type": "string", "description": "Terminal ID" },
+        "mid": { "type": "string", "description": "Merchant ID" },
+        "vendor": { "type": "string", "description": "Brand / Vendor" },
+        "model": { "type": "string", "description": "Model Name" },
+        "osVersion": { "type": "string", "description": "OS or App Version" },
+        "simNumber": { "type": "string", "description": "SIM Card Number" },
+        "provider": { "type": "string", "description": "SIM Provider" },
+        "imei": { "type": "string", "description": "IMEI / ICCID" },
+        "simCardNumber": { "type": "string", "description": "SIM Card ID / Number" },
+        "chargerIncluded": { "type": "boolean", "description": "Charger availability" },
+        "otherPeripherals": { "type": "string", "description": "Notes on other accessories like cables, case, etc." },
+        "status": { 
+          "type": "string", 
+          "enum": ["Incoming Stock", "Available in Warehouse", "Reserved / Allocated", "In Delivery", "Installed / Active", "Relocated", "Withdrawn", "Under Repair", "Damaged", "Lost", "Retired"],
+          "description": "Current status of the device"
+        },
+        "condition": { "type": "string", "enum": ["New", "Good", "Damaged"], "description": "Physical condition" },
+        "purchaseDate": { "type": "string", "format": "date", "description": "Date of acquisition" },
+        "purchasePrice": { "type": "number", "description": "Acquisition cost" },
+        "currentLocationId": { "type": "string", "description": "Reference to location" },
+        "currentCustomerId": { "type": "string", "description": "Reference to customer" },
+        "customerName": { "type": "string", "description": "Denormalized customer name" },
+        "contractStartDate": { "type": "string", "format": "date-time" },
+        "expectedEndDate": { "type": "string", "format": "date-time" },
+        "contractEndDateActual": { "type": "string", "format": "date-time" },
+        "contractStatus": { "type": "string", "enum": ["Active", "Terminated (Normal)", "Terminated (Early)"] },
+        "penaltyAmount": { "type": "number" },
+        "partPenaltyAmount": { "type": "number" },
+        "currentMonthlyRental": { "type": "number" },
+        "damagedParts": { "type": "array", "items": { "type": "string" } },
+        "lastUpdatedBy": { "type": "string", "description": "UID of user who last updated" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sn", "status", "vendor", "model"]
+    },
+    "customer": {
+      "title": "B2B Customer",
+      "description": "Enterprise customer or merchant.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "picName": { "type": "string" },
+        "contact": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "address": { "type": "string" },
+        "region": { "type": "string" },
+        "scheme": { "type": "string" },
+        "value": { "type": "number" },
+        "contractDuration": { "type": "number" }
+      },
+      "required": ["name", "email"]
+    },
+    "location": {
+      "title": "Location",
+      "description": "Warehouses, Merchant Sites, or Service Centers.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["Warehouse", "Merchant Site", "Service Center"] },
+        "address": { "type": "string" },
+        "customerId": { "type": "string", "description": "Optional link to customer" }
+      },
+      "required": ["name", "type"]
+    },
+    "contract": {
+      "title": "Contract",
+      "description": "Service agreement for EDC deployment.",
+      "type": "object",
+      "properties": {
+        "contractNumber": { "type": "string" },
+        "customerId": { "type": "string" },
+        "startDate": { "type": "string", "format": "date" },
+        "endDate": { "type": "string", "format": "date" },
+        "scheme": { "type": "string", "enum": ["Sewa", "Managed Service", "Jual Putus", "Pinjam Pakai", "Konsinyasi"] },
+        "value": { "type": "number" },
+        "sla": { "type": "string" }
+      },
+      "required": ["contractNumber", "customerId", "startDate", "endDate"]
+    },
+    "movement": {
+      "title": "EDC Movement",
+      "description": "Log of a single device movement or status change.",
+      "type": "object",
+      "properties": {
+        "edcId": { "type": "string" },
+        "type": { "type": "string" },
+        "fromStatus": { "type": "string" },
+        "toStatus": { "type": "string" },
+        "fromLocationId": { "type": "string" },
+        "toLocationId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "notes": { "type": "string" },
+        "transactionDate": { "type": "string", "format": "date" },
+        "baGenerated": { "type": "boolean" },
+        "baData": { 
+          "type": "object",
+          "properties": {
+            "templateType": { "type": "string" },
+            "generatedAt": { "type": "string", "format": "date-time" },
+            "customerPIC": { "type": "string" },
+            "technician": { "type": "string" }
+          }
+        },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["edcId", "type", "timestamp", "userId"]
+    },
+    "userProfile": {
+      "title": "User Profile",
+      "description": "Application user role and metadata.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["Admin", "Warehouse", "Operations", "Account Manager", "Service", "Management"] },
+        "displayName": { "type": "string" }
+      },
+      "required": ["email", "role"]
+    },
+    "edcPart": {
+      "title": "EDC Part",
+      "description": "Master list of EDC components and replacement prices.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "description": { "type": "string" }
+      },
+      "required": ["name", "price"]
+    }
+  },
+  "firestore": {
+    "edcs/{edcId}": { "schema": "edc", "description": "Collection of EDC devices" },
+    "customers/{customerId}": { "schema": "customer", "description": "Collection of B2B customers" },
+    "locations/{locationId}": { "schema": "location", "description": "Collection of various locations" },
+    "contracts/{contractId}": { "schema": "contract", "description": "Collection of service contracts" },
+    "movements/{movementId}": { "schema": "movement", "description": "Audit trail for device movements" },
+    "users/{userId}": { "schema": "userProfile", "description": "User account details" },
+    "edc_parts/{partId}": { "schema": "edcPart", "description": "Master list of parts" }
+  }
+}

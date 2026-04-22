@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function getUserData() {
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return userDoc != null ? userDoc.data : {"role": "None"};
+    }
+
+    function hasRole(roles) {
+      return isSignedIn() && getUserData().role in roles;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin') || 
+        request.auth.token.email == 'rismadakrisnaa@gmail.com'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    // ===============================================================
+    // Validation Helpers
+    // ===============================================================
+    function isValidEDC(data) {
+      return data.sn is string && data.sn.size() > 0 && data.sn.size() <= 128 &&
+             (data.status == null || data.status is string);
+    }
+
+    function isValidCustomer(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.email is string && data.email.size() <= 128;
+    }
+
+    function isValidPart(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.price is number && data.price >= 0;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Users
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if (isSignedIn() && request.auth.uid == userId && 
+                    (incoming().role == 'Admin' || incoming().role == 'Management' || incoming().role == 'User')) || isAdmin();
+      allow update: if isAdmin() || (request.auth.uid == userId && incoming().role == existing().role);
+      allow delete: if isAdmin();
+    }
+
+    // EDCs
+    match /edcs/{edcId} {
+      allow read: if isSignedIn();
+      allow create: if hasRole(['Admin', 'Warehouse', 'Operations', 'Management']) && isValidEDC(incoming());
+      allow update: if (hasRole(['Admin', 'Warehouse', 'Operations', 'Service', 'Management']) && isValidEDC(incoming())) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Customers
+    match /customers/{customerId} {
+      allow read: if isSignedIn();
+      allow create, update: if (hasRole(['Admin', 'Operations', 'Account Manager', 'Management']) && isValidCustomer(incoming())) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Locations
+    match /locations/{locationId} {
+      allow read: if isSignedIn();
+      allow create, update: if hasRole(['Admin', 'Warehouse', 'Operations', 'Management']) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // EDC Parts
+    match /edc_parts/{partId} {
+      allow read: if isSignedIn();
+      allow create, update: if (hasRole(['Admin', 'Service', 'Operations', 'Management']) && isValidPart(incoming())) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Movements
+    match /movements/{movementId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn(); // Log entry
+      allow update: if false; // Immutable audit trail
+      allow delete: if isAdmin();
+    }
+
+    // Legacy Contracts (kept for compat, though use edcs lifecycle now)
+    match /contracts/{contractId} {
+      allow read: if isSignedIn();
+      allow create, update: if hasRole(['Admin', 'Account Manager', 'Operations', 'Management']) || isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}

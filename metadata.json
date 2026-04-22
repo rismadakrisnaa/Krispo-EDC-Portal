@@ -1,0 +1,8 @@
+{
+  "name": "CHANNEL INVENTORY MANAGEMENT ARTAJASA",
+  "description": "Enterprise-grade inventory management system for ARTAJASA, tracking lifecycle, peripherals (SIM, Charger), and B2B allocations.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
