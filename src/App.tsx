@@ -14,6 +14,7 @@ import { ChangePasswordForm } from './components/ChangePasswordForm';
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
 const EDCList = lazy(() => import('./pages/EDCList').then(m => ({ default: m.EDCList })));
 const MovementPage = lazy(() => import('./pages/MovementPage').then(m => ({ default: m.MovementPage })));
+const ApprovalsPage = lazy(() => import('./pages/ApprovalsPage').then(m => ({ default: m.ApprovalsPage })));
 const ContractList = lazy(() => import('./pages/ContractList').then(m => ({ default: m.ContractList })));
 const CustomerList = lazy(() => import('./pages/CustomerList').then(m => ({ default: m.CustomerList })));
 const LocationList = lazy(() => import('./pages/LocationList').then(m => ({ default: m.LocationList })));
@@ -67,6 +68,7 @@ function CurrentPage() {
     switch (page) {
       case 'inventory': return <EDCList />;
       case 'movements': return <MovementPage />;
+      case 'approvals': return <ApprovalsPage />;
       case 'contracts': return <ContractList />;
       case 'customers': return <CustomerList />;
       case 'locations': return <LocationList />;

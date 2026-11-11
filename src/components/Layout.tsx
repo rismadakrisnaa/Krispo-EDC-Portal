@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ArrowLeftRight, ChevronDown, ChevronRight, Database, KeyRound, LayoutDashboard, LogOut, MapPin, Menu,
+  ArrowLeftRight, ChevronDown, ClipboardCheck, ChevronRight, Database, KeyRound, LayoutDashboard, LogOut, MapPin, Menu,
   Settings, ShieldAlert, Smartphone, Truck, UserCircle, Users, X,
 } from 'lucide-react';
 import { logout } from '../lib/firebase';
 import { cn } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
 import { useNav, type Page } from '../context/NavContext';
+import { useData } from '../context/DataContext';
 import { usernameFromEmail } from '../lib/constants';
 import { ChangePasswordForm } from './ChangePasswordForm';
 import { Modal, useFeedback } from './ui';
@@ -23,6 +24,7 @@ const MAIN_MENU: MenuItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'inventory', label: 'Aset & Monitoring', icon: Smartphone },
   { id: 'movements', label: 'Pergerakan EDC', icon: ArrowLeftRight },
+  { id: 'approvals', label: 'Persetujuan', icon: ClipboardCheck },
   { id: 'contracts', label: 'Monitoring Kontrak', icon: ShieldAlert },
 ];
 
@@ -49,6 +51,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const { toast } = useFeedback();
+  const { openApprovals } = useData();
+  // Badge jumlah pengajuan yang menunggu tindakan user ini.
+  const approvalBadge = openApprovals.filter(a =>
+    (a.status === 'Pending' && can('approvals.decide') && a.requestedBy !== user?.uid) || (a.status === 'Approved' && can('movements.create')),
+  ).length;
 
   useEffect(() => {
     if (isMasterPage) setMasterOpen(true);
@@ -68,6 +75,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     >
       <item.icon size={nested ? 14 : 18} className={cn('shrink-0', page === item.id ? 'text-white' : 'text-gray-400 group-hover:text-gray-600')} />
       <span>{item.label}</span>
+      {item.id === 'approvals' && approvalBadge > 0 && (
+        <span className={cn('ml-auto min-w-5 h-5 px-1.5 rounded-full text-[10px] font-black flex items-center justify-center', page === item.id ? 'bg-white text-brand-primary' : 'bg-amber-500 text-white')}>{approvalBadge}</span>
+      )}
     </button>
   );
 

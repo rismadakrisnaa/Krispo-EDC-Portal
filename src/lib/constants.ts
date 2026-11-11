@@ -183,6 +183,8 @@ export interface MovementRule {
   perUnitTidMid?: boolean;
   /** Mengakhiri kontrak aktif & menghitung denda (Withdrawal, Lost dari unit terpasang). */
   terminatesContract?: boolean;
+  /** Wajib disetujui orang lain (maker-checker) sebelum dieksekusi. */
+  requiresApproval?: boolean;
 }
 
 export const MOVEMENT_FIELD_LABEL: Record<MovementField, string> = {
@@ -229,6 +231,7 @@ export const MOVEMENT_RULES: MovementRule[] = [
     description: 'Unit cacat / gagal QC / klaim garansi dikembalikan ke supplier.',
     from: [STATUS.INCOMING, STATUS.AVAILABLE, STATUS.WITHDRAWN, STATUS.REPAIR, STATUS.DAMAGED], to: [STATUS.RETURNED_SUPPLIER],
     customer: 'clear', locationType: null, ba: true, baTitle: 'Retur ke Supplier', fields: ['referenceNo', 'courier'], required: ['referenceNo'],
+    requiresApproval: true,
   },
   // ---- Persiapan
   {
@@ -306,12 +309,14 @@ export const MOVEMENT_RULES: MovementRule[] = [
     description: 'Unit hilang. Jika unit sedang terpasang, kontraknya diakhiri dan denda dihitung otomatis. Segera blokir TID di host.',
     from: [STATUS.INCOMING, ...IN_STOCK, STATUS.RESERVED, STATUS.IN_DELIVERY, STATUS.INSTALLED, STATUS.REPAIR, STATUS.DAMAGED], to: [STATUS.LOST],
     customer: 'clear', locationType: null, ba: true, baTitle: 'Kehilangan', fields: ['referenceNo'], terminatesContract: true,
+    requiresApproval: true,
   },
   {
     type: 'Disposal', phase: 'Akhir Masa Pakai', label: 'Penghapusan (Disposal)',
     description: 'Unit dikeluarkan permanen dari aset. Wajib memastikan key enkripsi & data sudah dihapus.',
     from: [...IN_STOCK, STATUS.REPAIR, STATUS.DAMAGED], to: [STATUS.RETIRED], customer: 'clear', locationType: null, ba: true,
     baTitle: 'Penghapusan Aset', fields: ['referenceNo', 'disposalMethod', 'disposalValue', 'keyZeroized'], required: ['disposalMethod', 'keyZeroized'],
+    requiresApproval: true,
   },
 ];
 
@@ -330,6 +335,45 @@ export const movementLabel = (type?: string) => {
   if (type === 'Write-off') return 'Rusak / Hilang / Hapus';
   return type;
 };
+
+// ---------------------------------------------------------------------------
+// Persetujuan (maker-checker)
+// ---------------------------------------------------------------------------
+/** Jenis pengajuan selain pergerakan biasa. */
+export const CANCEL_TERMINATION = 'Cancel Termination';
+
+/** Tipe pergerakan yang wajib disetujui. Harus sama dengan APPROVAL_TYPES di firestore.rules. */
+export const APPROVAL_TYPES: string[] = [...MOVEMENT_RULES.filter(r => r.requiresApproval).map(r => r.type), CANCEL_TERMINATION];
+
+export const APPROVAL_STATUS = {
+  PENDING: 'Pending',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+  EXECUTED: 'Executed',
+} as const;
+
+export const APPROVAL_STATUS_META: Record<string, { label: string; badge: string }> = {
+  Pending: { label: 'Menunggu Persetujuan', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
+  Approved: { label: 'Disetujui, Siap Dieksekusi', badge: 'bg-blue-50 text-blue-700 border-blue-200' },
+  Rejected: { label: 'Ditolak', badge: 'bg-red-50 text-red-700 border-red-200' },
+  Cancelled: { label: 'Dibatalkan', badge: 'bg-gray-100 text-gray-600 border-gray-300' },
+  Executed: { label: 'Selesai Dieksekusi', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+};
+
+/** Maksimal unit per pengajuan, supaya eksekusinya muat dalam satu transaksi database. */
+export const MAX_APPROVAL_UNITS = 100;
+
+export const approvalTypeLabel = (type: string) => (type === CANCEL_TERMINATION ? 'Batal Pengakhiran Kontrak' : movementLabel(type));
+
+// ---------------------------------------------------------------------------
+// Lampiran
+// ---------------------------------------------------------------------------
+export const ATTACHMENT_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+/** Batas ukuran file setelah kompresi. Firestore membatasi 1 MiB per dokumen (base64 menambah ~33%). */
+export const MAX_ATTACHMENT_BYTES = 700 * 1024;
+export const MAX_ATTACHMENTS_PER_UPLOAD = 10;
+export type AttachmentParent = 'movement' | 'approval' | 'asset';
 
 // ---------------------------------------------------------------------------
 // Pengadaan & master perangkat
@@ -368,25 +412,27 @@ export type Permission =
   | 'locations.write'
   | 'parts.write'
   | 'suppliers.write'
+  | 'approvals.decide'
+  | 'attachments.upload'
   | 'delete'
   | 'users.manage';
 
 const PERMISSIONS: Record<Role, Permission[]> = {
-  Admin: ['assets.create', 'assets.update', 'movements.create', 'customers.write', 'locations.write', 'parts.write', 'suppliers.write', 'delete', 'users.manage'],
-  Operations: ['assets.create', 'assets.update', 'movements.create', 'customers.write', 'locations.write', 'parts.write', 'suppliers.write'],
-  Warehouse: ['assets.create', 'assets.update', 'movements.create', 'locations.write', 'suppliers.write'],
-  Service: ['assets.update', 'movements.create', 'parts.write'],
-  'Account Manager': ['customers.write'],
-  Management: [],
+  Admin: ['assets.create', 'assets.update', 'movements.create', 'customers.write', 'locations.write', 'parts.write', 'suppliers.write', 'approvals.decide', 'attachments.upload', 'delete', 'users.manage'],
+  Operations: ['assets.create', 'assets.update', 'movements.create', 'customers.write', 'locations.write', 'parts.write', 'suppliers.write', 'attachments.upload'],
+  Warehouse: ['assets.create', 'assets.update', 'movements.create', 'locations.write', 'suppliers.write', 'attachments.upload'],
+  Service: ['assets.update', 'movements.create', 'parts.write', 'attachments.upload'],
+  'Account Manager': ['customers.write', 'attachments.upload'],
+  Management: ['approvals.decide', 'attachments.upload'],
 };
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
-  Admin: 'Akses penuh: semua data, hapus data, dan kelola akun user.',
+  Admin: 'Akses penuh: semua data, hapus data, kelola akun user, dan menyetujui pengajuan.',
   Operations: 'Penerimaan & registrasi aset, pergerakan EDC, master customer, merchant, supplier, dan part.',
   Warehouse: 'Penerimaan & registrasi aset, pergerakan EDC, master lokasi dan supplier.',
   Service: 'Update aset, pergerakan (perbaikan/penarikan), dan master part.',
   'Account Manager': 'Kelola master customer. Data lain hanya baca.',
-  Management: 'Hanya baca: dashboard, monitoring aset, dan kontrak.',
+  Management: 'Baca semua data dan menyetujui / menolak pengajuan (disposal, kehilangan, retur, batal pengakhiran).',
 };
 
 export const can = (role: string | null | undefined, permission: Permission) =>

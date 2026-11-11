@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext';
 import { EmptyState, Field, Modal, PageHeader, btnPrimary, btnSecondary, inputClass, useFeedback } from '../components/ui';
 
 // Data operasional yang dihapus saat reset. Akun user sengaja TIDAK ikut dihapus.
-const RESET_COLLECTIONS = ['movements', 'edcs', 'contracts', 'customers', 'locations', 'edc_parts'];
+const RESET_COLLECTIONS = ['movements', 'approvals', 'attachment_data', 'attachments', 'edcs', 'contracts', 'customers', 'locations', 'edc_parts', 'suppliers', 'device_models'];
 
 /** Profil tanpa username berasal dari versi lama (login Google) dan tidak bisa dipakai login lagi. */
 const isLegacy = (u: UserProfile) => !u.username || !(u.email || '').endsWith(`@${LOGIN_EMAIL_DOMAIN}`);
@@ -113,7 +113,7 @@ export function UserManagement() {
   async function handleReset() {
     const ok = await confirm({
       title: 'Reset semua data operasional?', danger: true, confirmLabel: 'Hapus Semua Data', requireText: 'RESET',
-      message: <>Seluruh aset, customer, lokasi, part, kontrak, dan riwayat pergerakan akan dihapus <b>permanen</b>. Akun user tidak ikut dihapus. Export data lebih dulu jika masih dibutuhkan.</>,
+      message: <>Seluruh aset, customer, merchant & lokasi, supplier & model, part, kontrak, pengajuan, lampiran, dan riwayat pergerakan akan dihapus <b>permanen</b>. Akun user tidak ikut dihapus. Export data lebih dulu jika masih dibutuhkan.</>,
     });
     if (!ok) return;
     run(async () => {
@@ -198,7 +198,7 @@ export function UserManagement() {
 
           <div className="bg-red-50 p-5 rounded-xl border border-red-100 space-y-3">
             <h3 className="text-[10px] font-black text-red-600 uppercase tracking-[0.2em] flex items-center gap-2"><AlertTriangle size={14} /> Zona Bahaya</h3>
-            <p className="text-[11px] text-red-700 leading-relaxed">Menghapus seluruh data operasional (aset, customer, lokasi, part, kontrak, riwayat). Tidak bisa dibatalkan.</p>
+            <p className="text-[11px] text-red-700 leading-relaxed">Menghapus seluruh data operasional (aset, customer, merchant, supplier, part, kontrak, pengajuan, lampiran, riwayat). Tidak bisa dibatalkan.</p>
             <button disabled={busy} onClick={handleReset} className="w-full py-2.5 bg-red-600 text-white rounded-lg text-[11px] font-black uppercase tracking-widest hover:bg-red-700 disabled:opacity-50">Reset Data Operasional</button>
           </div>
         </div>

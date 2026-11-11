@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
-export type Page = 'dashboard' | 'inventory' | 'movements' | 'contracts' | 'customers' | 'locations' | 'suppliers' | 'parts' | 'users';
-export const PAGES: Page[] = ['dashboard', 'inventory', 'movements', 'contracts', 'customers', 'locations', 'suppliers', 'parts', 'users'];
+export type Page = 'dashboard' | 'inventory' | 'movements' | 'approvals' | 'contracts' | 'customers' | 'locations' | 'suppliers' | 'parts' | 'users';
+export const PAGES: Page[] = ['dashboard', 'inventory', 'movements', 'approvals', 'contracts', 'customers', 'locations', 'suppliers', 'parts', 'users'];
 
 type Params = Record<string, string>;
 

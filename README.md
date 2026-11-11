@@ -12,7 +12,8 @@ Stack: React 19, Vite, Tailwind CSS 4, Firebase Auth (username + password) dan C
 | Dashboard | Ringkasan armada aktif per status, hal yang perlu perhatian (QC tertunda, stok menganggur, garansi habis, kontrak berakhir, denda), pergerakan terbaru. Semua kartu bisa diklik. |
 | Aset & Monitoring | Master perangkat / SIM / peripheral, penerimaan dari supplier (manual & import Excel), posisi unit (merchant, kota, region), lama di status, garansi, filter, export, detail + timeline siklus hidup. |
 | Pergerakan EDC | Satu-satunya tempat status unit berubah, dari penerimaan sampai penghapusan (lihat alur di bawah). Berita Acara PDF otomatis. |
-| Monitoring Kontrak | Kontrak per unit, ARO, kontrak yang segera berakhir, denda, pembatalan pengakhiran. |
+| Persetujuan | Pengajuan disposal, kehilangan, retur supplier, dan batal pengakhiran kontrak: setujui / tolak, eksekusi, bukti pendukung, riwayat. |
+| Monitoring Kontrak | Kontrak per unit, ARO, kontrak yang segera berakhir, denda, pengajuan batal pengakhiran. |
 | Master Data | Customer B2B, Merchant & Lokasi (outlet milik customer, gudang, service center), Supplier & Model perangkat, Part EDC. |
 | User & Role | Khusus Admin: buat akun user, atur role, nonaktifkan akun. |
 
@@ -40,10 +41,41 @@ Username admin pertama dan domain login didefinisikan di dua tempat yang harus s
 | Warehouse | Aset, pergerakan, lokasi |
 | Service | Update aset, pergerakan, part |
 | Account Manager | Customer |
-| Management | Hanya baca |
+| Management | Baca semua data + menyetujui / menolak pengajuan |
 
 Matriks ini didefinisikan di `src/lib/constants.ts` (untuk tampilan) dan ditegakkan di `firestore.rules` (yang sebenarnya menjaga data).
 Kalau mengubah salah satu, ubah keduanya dan jalankan `npm run test:rules`.
+
+## Persetujuan (maker-checker)
+
+Pergerakan berisiko tidak bisa langsung dijalankan:
+
+| Pengajuan | Dari |
+| --- | --- |
+| Penghapusan (Disposal) | Pergerakan EDC |
+| Hilang / Dicuri | Pergerakan EDC |
+| Retur ke Supplier (RMA) | Pergerakan EDC |
+| Batal Pengakhiran Kontrak | Monitoring Kontrak |
+
+Alurnya:
+
+1. Operator (Operations / Warehouse / Service) **mengajukan**. Unit terkunci dari pergerakan lain.
+2. Admin atau Management lain (bukan pengaju) **menyetujui** atau **menolak** (alasan wajib).
+3. Operator **mengeksekusi** pengajuan yang disetujui: status berubah dan Berita Acara diunduh.
+
+Aturan ini dijaga di `firestore.rules`, bukan hanya di tampilan: status Hilang / Dihapuskan / Diretur dan pemulihan
+kontrak ditolak database tanpa pengajuan yang disetujui untuk unit tersebut, dan satu pengajuan hanya bisa dieksekusi sekali.
+
+## Lampiran
+
+Foto dan PDF bisa dilampirkan ke pengajuan (bukti pendukung), ke tiap transaksi di riwayat pergerakan (mis. BA bertanda
+tangan, foto instalasi), dan ke unit (Dokumen Unit: invoice, kartu garansi).
+
+- Disimpan di Firestore (koleksi `attachments` dan `attachment_data`), jadi tidak butuh Cloud Storage / paket berbayar.
+- Foto dikompres otomatis di browser (sisi terpanjang 1600px, biasanya 200-400 KB). PDF maksimal 700 KB.
+- Kuota gratis Firestore 1 GiB cukup untuk ribuan lampiran. Jika nanti project di-upgrade ke paket Blaze,
+  lampiran sebaiknya dipindah ke Cloud Storage.
+- Lampiran tidak bisa diubah. Pengunggah bisa menghapusnya dalam 24 jam (salah unggah); setelah itu hanya Admin.
 
 ## Menjalankan
 

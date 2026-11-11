@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import type { Asset, Customer, DeviceModel, Location, Part, Supplier } from '../lib/types';
+import type { Approval, Asset, Customer, DeviceModel, Location, Part, Supplier } from '../lib/types';
 
 /**
  * Satu sumber data untuk semua halaman.
@@ -17,6 +17,10 @@ interface DataValue {
   parts: Part[];
   suppliers: Supplier[];
   models: DeviceModel[];
+  /** Pengajuan yang masih berjalan (menunggu persetujuan / menunggu eksekusi). */
+  openApprovals: Approval[];
+  /** Unit yang sedang terkunci oleh pengajuan: asset id -> pengajuan. */
+  approvalByAsset: Map<string, Approval>;
   loading: boolean;
   error: string | null;
   assetById: Map<string, Asset>;
@@ -43,6 +47,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [parts, setParts] = useState<Part[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [models, setModels] = useState<DeviceModel[]>([]);
+  const [openApprovals, setOpenApprovals] = useState<Approval[]>([]);
   const [loaded, setLoaded] = useState({ assets: false, customers: false, locations: false, parts: false, suppliers: false, models: false });
   const [error, setError] = useState<string | null>(null);
 
@@ -81,6 +86,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setSuppliers(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Supplier).sort(byName));
         markLoaded('suppliers');
       }, onError('suppliers')),
+      onSnapshot(query(collection(db, 'approvals'), where('status', 'in', ['Pending', 'Approved'])), snap => {
+        setOpenApprovals(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Approval)
+          .sort((a, b) => (b.requestedAt?.toMillis() || 0) - (a.requestedAt?.toMillis() || 0)));
+      }, err => console.error('Gagal memuat pengajuan', err)),
       onSnapshot(collection(db, 'device_models'), snap => {
         setModels(
           snap.docs.map(d => ({ ...d.data(), id: d.id }) as DeviceModel)
@@ -106,6 +115,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         : { ...a, customerName, locationName, contractCustomerName };
     });
     const assetById = new Map<string, Asset>(assets.map(a => [a.id, a] as [string, Asset]));
+    const approvalByAsset = new Map<string, Approval>();
+    for (const approval of openApprovals) for (const id of approval.assetIds || []) approvalByAsset.set(id, approval);
     const childMap = new Map<string, Asset[]>();
     for (const asset of assets) {
       if (!asset.parentDeviceId) continue;
@@ -120,6 +131,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       parts,
       suppliers,
       models,
+      openApprovals,
+      approvalByAsset,
       loading: !Object.values(loaded).every(Boolean),
       error,
       assetById,
@@ -127,7 +140,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       locationById,
       childrenOf: deviceId => childMap.get(deviceId) || [],
     };
-  }, [rawAssets, customers, locations, parts, suppliers, models, loaded, error]);
+  }, [rawAssets, customers, locations, parts, suppliers, models, openApprovals, loaded, error]);
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }

@@ -3,14 +3,14 @@ import { AlertTriangle, Download, Eye, RefreshCw, RotateCcw, Search, ShieldAlert
 import { describeError } from '../lib/firebase';
 import { CONTRACT_STATUS, STATUS } from '../lib/constants';
 import { contractHealth, type ContractHealth } from '../lib/contract';
-import { cancelTermination } from '../lib/movements';
+import { requestCancelTermination } from '../lib/approvals';
 import { writeExcel } from '../lib/excel';
 import { cn, formatDate, formatIDR, locationLabel, matchesSearch } from '../lib/utils';
 import type { Asset } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { useNav } from '../context/NavContext';
-import { EmptyState, Modal, PageHeader, Pagination, StatusBadge, btnSecondary, inputClass, useFeedback } from '../components/ui';
+import { EmptyState, Modal, PageHeader, Pagination, StatusBadge, btnPrimary, btnSecondary, inputClass, useFeedback } from '../components/ui';
 
 const PAGE_SIZE = 50;
 
@@ -26,9 +26,10 @@ const contractCustomer = (a: Asset) => a.contractCustomerName || a.customerName 
 const totalPenalty = (a: Asset) => (a.penaltyAmount || 0) + (a.partPenaltyAmount || 0);
 /** Pengakhiran hanya bisa dibatalkan selama unit belum bergerak lagi sejak ditarik. */
 const canCancel = (a: Asset) => a.contractStatus !== CONTRACT_STATUS.ACTIVE && a.status === STATUS.WITHDRAWN;
+/** Unit yang sudah ada dalam pengajuan lain tidak bisa diajukan lagi. */
 
 export function ContractList() {
-  const { assets, childrenOf, customerById } = useData();
+  const { assets, childrenOf, customerById, approvalByAsset } = useData();
   const { can } = useAuth();
   const { params, go } = useNav();
   const { toast, confirm } = useFeedback();
@@ -76,23 +77,23 @@ export function ContractList() {
   const allSelected = cancellable.length > 0 && cancellable.every(id => selectedIds.includes(id));
   const detail = rows.find(r => r.asset.id === detailId);
 
-  async function handleCancel(targets: Asset[]) {
-    const penalties = targets.reduce((sum, a) => sum + totalPenalty(a), 0);
-    const ok = await confirm({
-      title: 'Batalkan pengakhiran kontrak?',
-      confirmLabel: 'Ya, Pulihkan Kontrak',
-      message: (
-        <>
-          {targets.length === 1 ? <>Unit <b>{targets[0].sn}</b></> : <><b>{targets.length} unit</b></>} kembali berstatus <b>Terpasang</b> di customer kontraknya
-          (beserta SIM / peripheral tertaut), kontrak aktif lagi, dan denda {formatIDR(penalties)} dihapus.
-        </>
-      ),
-    });
-    if (!ok) return;
+  const [cancelTargets, setCancelTargets] = useState<Asset[] | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+
+  function handleCancel(targets: Asset[]) {
+    const locked = targets.find(a => approvalByAsset.has(a.id));
+    if (locked) return toast(`Unit ${locked.sn} sudah ada dalam pengajuan yang sedang berjalan. Cek menu Persetujuan.`, 'error');
+    setCancelReason('');
+    setCancelTargets(targets);
+  }
+
+  async function submitCancel() {
+    if (!cancelTargets) return;
     setBusy(true);
     try {
-      const count = await cancelTermination(targets, { childrenOf, customerById });
-      toast(`Kontrak ${count} unit dipulihkan.`);
+      await requestCancelTermination(cancelTargets, cancelReason, { childrenOf, customerById, approvalByAsset });
+      toast(`Pengajuan batal pengakhiran untuk ${cancelTargets.length} unit dikirim. Kontrak dipulihkan setelah disetujui dan dieksekusi.`);
+      setCancelTargets(null);
       setSelectedIds([]);
       setDetailId(null);
     } catch (error) {
@@ -169,7 +170,7 @@ export function ContractList() {
               disabled={busy} onClick={() => handleCancel(assets.filter(a => selectedIds.includes(a.id)))}
               className="px-5 py-2 bg-white text-brand-primary rounded-lg text-xs font-black uppercase tracking-wide flex items-center gap-2 disabled:opacity-50"
             >
-              <RotateCcw size={14} className={busy ? 'animate-spin' : ''} /> Batalkan Pengakhiran
+              <RotateCcw size={14} className={busy ? 'animate-spin' : ''} /> Ajukan Batal Pengakhiran
             </button>
           </div>
         </div>
@@ -198,7 +199,7 @@ export function ContractList() {
               {pageRows.map(({ asset: a, health, effectiveEnd, isARO, daysLeft }) => (
                 <tr key={a.id} className={cn('hover:bg-gray-50/80 text-[13px]', selectedIds.includes(a.id) && 'bg-brand-primary-light')}>
                   <td className="px-4 py-3">
-                    {can('movements.create') && canCancel(a) && (
+                    {can('movements.create') && canCancel(a) && !approvalByAsset.has(a.id) && (
                       <input
                         type="checkbox" aria-label={`Pilih ${a.sn}`} className="w-4 h-4" checked={selectedIds.includes(a.id)}
                         onChange={() => setSelectedIds(prev => (prev.includes(a.id) ? prev.filter(i => i !== a.id) : [...prev, a.id]))}
@@ -241,7 +242,7 @@ export function ContractList() {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1.5">
                       <button onClick={() => setDetailId(a.id)} aria-label={`Detail kontrak ${a.sn}`} className="p-1.5 text-brand-text-muted hover:text-brand-primary border border-brand-border rounded-lg"><Eye size={14} /></button>
-                      {can('movements.create') && canCancel(a) && (
+                      {can('movements.create') && canCancel(a) && !approvalByAsset.has(a.id) && (
                         <button disabled={busy} onClick={() => handleCancel([a])} title="Batalkan pengakhiran" aria-label={`Batalkan pengakhiran ${a.sn}`} className="p-1.5 text-red-500 bg-red-50 hover:bg-red-100 rounded-lg disabled:opacity-50"><RotateCcw size={14} /></button>
                       )}
                     </div>
@@ -260,6 +261,25 @@ export function ContractList() {
         )}
         <div className="mt-auto"><Pagination page={page} pageSize={PAGE_SIZE} total={filtered.length} onPage={setPage} /></div>
       </div>
+
+      <Modal open={!!cancelTargets} onClose={() => setCancelTargets(null)} busy={busy} title="Ajukan Batal Pengakhiran Kontrak" subtitle={cancelTargets ? `${cancelTargets.length} unit` : ''}>
+        {cancelTargets && (
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-brand-text-muted leading-relaxed">
+              Setelah disetujui Admin / Management lain dan dieksekusi, {cancelTargets.length === 1 ? <>unit <b>{cancelTargets[0].sn}</b></> : <><b>{cancelTargets.length} unit</b></>} kembali
+              <b> Terpasang</b> di customer kontraknya, kontrak aktif lagi, dan denda {formatIDR(cancelTargets.reduce((sum, a) => sum + totalPenalty(a), 0))} dihapus.
+            </p>
+            <label className="block space-y-1.5">
+              <span className="block text-[10px] font-bold text-brand-text-muted uppercase tracking-widest px-1">Alasan Pembatalan</span>
+              <textarea autoFocus maxLength={500} className={cn(inputClass, 'min-h-[80px]')} placeholder="Mis. penarikan salah input, customer batal mengakhiri kontrak" value={cancelReason} onChange={e => setCancelReason(e.target.value)} />
+            </label>
+            <div className="flex gap-3">
+              <button disabled={busy} onClick={() => setCancelTargets(null)} className={cn(btnSecondary, 'flex-1 py-3')}>Batal</button>
+              <button disabled={busy || !cancelReason.trim()} onClick={submitCancel} className={cn(btnPrimary, 'flex-1 py-3')}>{busy ? 'Mengirim...' : 'Kirim Pengajuan'}</button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal open={!!detail} onClose={() => setDetailId(null)} busy={busy} title={detail?.asset.sn || ''} subtitle={`Kontrak · ${[detail?.asset.vendor, detail?.asset.model].filter(Boolean).join(' ')}`}>
         {detail && (() => {
@@ -297,9 +317,9 @@ export function ContractList() {
               )}
               <div className="flex gap-3">
                 <button onClick={() => { setDetailId(null); go('inventory', { q: a.sn }); }} className={cn(btnSecondary, 'flex-1 py-3')}>Lihat Aset</button>
-                {can('movements.create') && canCancel(a) && (
+                {can('movements.create') && canCancel(a) && !approvalByAsset.has(a.id) && (
                   <button disabled={busy} onClick={() => handleCancel([a])} className="flex-1 py-3 bg-red-50 text-red-600 text-sm font-bold rounded-lg hover:bg-red-100 border border-red-100 flex items-center justify-center gap-2 disabled:opacity-50">
-                    <RotateCcw size={15} /> Batalkan Pengakhiran
+                    <RotateCcw size={15} /> Ajukan Batal Pengakhiran
                   </button>
                 )}
               </div>

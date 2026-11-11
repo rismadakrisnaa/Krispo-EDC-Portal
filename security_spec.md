@@ -13,6 +13,8 @@ Semua aturan di dokumen ini ditegakkan oleh `firestore.rules` dan diuji otomatis
 - Serial number aset tidak bisa diganti setelah terdaftar. Status harus salah satu dari daftar resmi.
 - Nilai uang (denda, sewa, harga part) harus angka dan tidak boleh negatif.
 - Log pergerakan dicatat atas nama user yang login dengan waktu server, dan tidak bisa diedit siapa pun.
+- Status akhir (Hilang, Dihapuskan, Diretur ke Supplier) dan pemulihan kontrak yang sudah diakhiri hanya bisa terjadi
+  dengan pengajuan yang disetujui orang lain (maker-checker).
 - Hapus data hanya oleh Admin.
 
 ## 2. Skenario serangan dan statusnya
@@ -32,6 +34,12 @@ Semua aturan di dokumen ini ditegakkan oleh `firestore.rules` dan diuji otomatis
 | 11 | Log palsu atas nama user lain / tanggal server dipalsukan | Ditolak, teruji |
 | 12 | Role read-only (Management) menulis langsung ke Firestore tanpa lewat UI | Ditolak, teruji |
 | 13 | State shortcutting: mengubah status aset tanpa lewat log pergerakan | Sebagian, lihat keterbatasan |
+| 15 | Disposal / hilang / retur supplier tanpa persetujuan | Ditolak rules: butuh pengajuan yang disetujui untuk unit itu, teruji |
+| 16 | Menyetujui pengajuan sendiri (termasuk Admin) | Ditolak rules, teruji |
+| 17 | Memakai ulang pengajuan yang sudah dieksekusi | Ditolak: pengajuan berubah Executed di batch yang sama, teruji |
+| 18 | Menghapus denda dengan memulihkan kontrak diam-diam | Ditolak rules: pemulihan kontrak butuh pengajuan yang disetujui, teruji |
+| 19 | Mengubah / menghapus bukti lampiran | Lampiran tidak bisa diubah; hapus hanya pengunggah (24 jam) atau Admin, teruji |
+| 20 | Unggah file berbahaya / sangat besar | Hanya JPG/PNG/WEBP/PDF, maks 700 KB, divalidasi rules, teruji |
 | 14 | Pemalsuan tanggal kontrak oleh role operasional | Sebagian, lihat keterbatasan |
 
 ## 3. Keterbatasan yang diketahui

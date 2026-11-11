@@ -152,6 +152,53 @@ service cloud.firestore {
              optAmount(data, 'cost') && optAmount(data, 'disposalValue') && optString(data, 'referenceNo', 200);
     }
 
+    // ---------------- Persetujuan (maker-checker) ----------------
+    // Harus sama dengan APPROVAL_TYPES di src/lib/constants.ts.
+    function approvalTypes() {
+      return ['Return to Supplier', 'Lost', 'Disposal', 'Cancel Termination'];
+    }
+
+    function approvalPath(approvalId) {
+      return /databases/$(database)/documents/approvals/$(approvalId);
+    }
+
+    // Pengajuan `approvalId` sudah disetujui, bertipe `type`, dan mencakup unit `assetId`.
+    function approvedFor(approvalId, assetId, type) {
+      return approvalId is string && approvalId.size() > 0 && approvalId.size() <= 128 &&
+             exists(approvalPath(approvalId)) &&
+             get(approvalPath(approvalId)).data.status == 'Approved' &&
+             get(approvalPath(approvalId)).data.type == type &&
+             assetId in get(approvalPath(approvalId)).data.assetIds;
+    }
+
+    function closedStatuses() {
+      return ['Lost', 'Retired', 'Returned to Supplier'];
+    }
+
+    function approvalTypeForStatus(status) {
+      return status == 'Lost' ? 'Lost' : (status == 'Retired' ? 'Disposal' : 'Return to Supplier');
+    }
+
+    // Unit (atau perangkat induk SIM/peripheral) dicakup pengajuan yang disetujui.
+    function assetApproved(edcId, type) {
+      return approvedFor(incoming().get('lastApprovalId', ''), edcId, type) ||
+             approvedFor(incoming().get('lastApprovalId', ''), existing().get('parentDeviceId', ''), type);
+    }
+
+    // Perubahan status ke status akhir (hilang, dihapuskan, diretur) wajib disetujui.
+    function closingAllowed(edcId) {
+      return !(incoming().status in closedStatuses()) || incoming().status == existing().status ||
+             assetApproved(edcId, approvalTypeForStatus(incoming().status));
+    }
+
+    // Memulihkan kontrak yang sudah diakhiri (tanggal mulai sama = bukan pemasangan baru) wajib disetujui.
+    function reactivationAllowed(edcId) {
+      return !(existing().get('contractStatus', '') in ['Terminated (Early)', 'Terminated (Normal)'] &&
+               incoming().get('contractStatus', '') == 'Active' &&
+               incoming().get('contractStartDate', '') == existing().get('contractStartDate', '')) ||
+             assetApproved(edcId, 'Cancel Termination');
+    }
+
     // ---------------- Users ----------------
     function isValidUsername(username) {
       return username is string && username.matches('^[a-z0-9][a-z0-9._-]{2,31}$');
@@ -201,10 +248,12 @@ service cloud.firestore {
     match /edcs/{edcId} {
       allow read: if canRead();
       allow create: if hasRole(['Operations', 'Warehouse']) && isValidAsset(incoming()) &&
-                    incoming().assetType in ['perangkat', 'sim', 'peripheral'];
-      // Serial number tidak bisa diganti setelah terdaftar.
+                    incoming().assetType in ['perangkat', 'sim', 'peripheral'] &&
+                    !(incoming().status in closedStatuses());
+      // Serial number tidak bisa diganti setelah terdaftar. Status akhir & pemulihan kontrak butuh persetujuan.
       allow update: if hasRole(['Operations', 'Warehouse', 'Service']) && isValidAsset(incoming()) &&
-                    incoming().sn == existing().sn;
+                    incoming().sn == existing().sn &&
+                    closingAllowed(edcId) && reactivationAllowed(edcId);
       allow delete: if isAdmin();
     }
 
@@ -240,11 +289,83 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ---------------- Pengajuan ----------------
+    match /approvals/{approvalId} {
+      allow read: if canRead();
+      allow create: if hasRole(['Operations', 'Warehouse', 'Service']) &&
+                    incoming().keys().hasOnly(['type', 'assetIds', 'assetSns', 'request', 'summary', 'estimatedPenalty', 'status',
+                                               'requestedBy', 'requestedByName', 'requestedAt']) &&
+                    incoming().type in approvalTypes() &&
+                    incoming().status == 'Pending' &&
+                    incoming().requestedBy == request.auth.uid &&
+                    incoming().requestedAt == request.time &&
+                    incoming().assetIds is list && incoming().assetIds.size() > 0 && incoming().assetIds.size() <= 100 &&
+                    incoming().assetSns is list && incoming().assetSns.size() == incoming().assetIds.size() &&
+                    optString(incoming(), 'summary', 1000);
+      allow update: if (
+                      // Keputusan: Admin / Management, bukan pengaju sendiri.
+                      hasRole(['Management']) && existing().status == 'Pending' &&
+                      existing().requestedBy != request.auth.uid &&
+                      incoming().status in ['Approved', 'Rejected'] &&
+                      incoming().decidedBy == request.auth.uid && incoming().decidedAt == request.time &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['status', 'decidedBy', 'decidedByName', 'decidedAt', 'decisionNote']) &&
+                      optString(incoming(), 'decisionNote', 500)
+                    ) || (
+                      // Pengaju membatalkan pengajuannya.
+                      existing().requestedBy == request.auth.uid && existing().status in ['Pending', 'Approved'] &&
+                      incoming().status == 'Cancelled' &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+                    ) || (
+                      // Eksekusi pengajuan yang sudah disetujui.
+                      hasRole(['Operations', 'Warehouse', 'Service']) && existing().status == 'Approved' &&
+                      incoming().status == 'Executed' && incoming().executedBy == request.auth.uid &&
+                      incoming().executedAt == request.time &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['status', 'executedBy', 'executedByName', 'executedAt', 'baNumber'])
+                    );
+      allow delete: if isAdmin(); // hanya untuk fitur reset data
+    }
+
+    // ---------------- Lampiran ----------------
+    // Metadata (ringan, untuk daftar) dan isi file (base64) dipisah.
+    match /attachments/{attachmentId} {
+      allow read: if canRead();
+      allow create: if canRead() &&
+                    incoming().keys().hasOnly(['parentType', 'parentId', 'name', 'mimeType', 'size', 'label', 'uploadedBy', 'uploadedByName', 'uploadedAt']) &&
+                    incoming().parentType in ['movement', 'approval', 'asset'] &&
+                    incoming().parentId is string && incoming().parentId.size() > 0 && incoming().parentId.size() <= 128 &&
+                    incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 200 &&
+                    incoming().mimeType in ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] &&
+                    incoming()['size'] is int && incoming()['size'] > 0 && incoming()['size'] <= 716800 &&
+                    incoming().uploadedBy == request.auth.uid && incoming().uploadedAt == request.time &&
+                    existsAfter(/databases/$(database)/documents/attachment_data/$(attachmentId)) &&
+                    optString(incoming(), 'label', 100);
+      allow update: if false;
+      // Pengunggah boleh menghapus dalam 24 jam (salah unggah); setelah itu hanya Admin.
+      allow delete: if isAdmin() ||
+                    (existing().uploadedBy == request.auth.uid && request.time < existing().uploadedAt + duration.value(1, 'd'));
+    }
+
+    match /attachment_data/{attachmentId} {
+      allow read: if canRead();
+      allow create: if canRead() &&
+                    incoming().keys().hasOnly(['data', 'uploadedBy']) &&
+                    incoming().uploadedBy == request.auth.uid &&
+                    incoming().data is string && incoming().data.size() > 0 && incoming().data.size() <= 1000000 &&
+                    getAfter(/databases/$(database)/documents/attachments/$(attachmentId)).data.uploadedBy == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin() ||
+                    (existing().uploadedBy == request.auth.uid &&
+                     request.time < get(/databases/$(database)/documents/attachments/$(attachmentId)).data.uploadedAt + duration.value(1, 'd'));
+    }
+
     // ---------------- Log pergerakan (audit trail) ----------------
     match /movements/{movementId} {
       allow read: if canRead();
       // Pencatat harus user yang sedang login, dengan waktu server.
-      allow create: if hasRole(['Operations', 'Warehouse', 'Service']) && isValidMovement(incoming());
+      // Tipe yang butuh persetujuan wajib merujuk pengajuan yang disetujui untuk unit tersebut.
+      allow create: if hasRole(['Operations', 'Warehouse', 'Service']) && isValidMovement(incoming()) &&
+                    (!(incoming().type in approvalTypes()) ||
+                     approvedFor(incoming().get('approvalId', ''), incoming().edcId, incoming().type));
       allow update: if false; // audit trail tidak bisa diedit
       allow delete: if isAdmin(); // hanya untuk fitur reset data oleh Admin
     }

@@ -6,6 +6,9 @@ import { db, describeError } from '../lib/firebase';
 import { CONDITIONS, DISPOSAL_METHODS, LOCATION_TYPE_LABEL, MOVEMENT_PHASES, MOVEMENT_RULES, movementLabel, movementRule, statusMeta, type MovementField, type MovementType } from '../lib/constants';
 import { checkEligibility, endsContract, executeMovement, fieldLabel, missingDetails, redownloadBA, resolveCustomer, terminationFor, withdrawalDateProblem, type MovementDetails } from '../lib/movements';
 import { SwapForm } from './movements/SwapForm';
+import { requestMovementApproval } from '../lib/approvals';
+import { Attachments } from '../components/Attachments';
+import { MAX_APPROVAL_UNITS } from '../lib/constants';
 import { cn, formatDate, formatIDR, matchesSearch, movementDetailText } from '../lib/utils';
 import type { Movement, Part } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
@@ -20,9 +23,9 @@ const MOVEMENT_FIELD_TEXT = {
 const today = () => format(new Date(), 'yyyy-MM-dd');
 
 export function MovementPage() {
-  const { assets, customers, locations, parts, assetById, customerById, childrenOf } = useData();
+  const { assets, customers, locations, parts, assetById, customerById, childrenOf, approvalByAsset } = useData();
   const { can, profile } = useAuth();
-  const { movementSeed, clearMovementSeed } = useNav();
+  const { movementSeed, clearMovementSeed, go } = useNav();
   const { toast } = useFeedback();
   const canMove = can('movements.create');
 
@@ -64,7 +67,7 @@ export function MovementPage() {
   }
 
   const selected = useMemo(() => assetIds.map(id => assetById.get(id)).filter(Boolean) as typeof assets, [assetIds, assetById]);
-  const { eligible, blocked } = useMemo(() => checkEligibility(rule, selected), [rule, selected]);
+  const { eligible, blocked } = useMemo(() => checkEligibility(rule, selected, approvalByAsset), [rule, selected, approvalByAsset]);
   const blockedReason = useMemo(() => new Map(blocked.map(b => [b.asset.id, b.reason])), [blocked]);
 
   const formCustomer = customerById.get(customerId) || null;
@@ -155,6 +158,7 @@ export function MovementPage() {
   if (rule.locationRequired && !locationId) problems.push(`Pilih ${LOCATION_TYPE_LABEL[rule.locationType || ''] || 'lokasi'} tujuan.`);
   const missing = missingDetails(rule, details);
   if (missing.length) problems.push(`Wajib diisi: ${missing.join(', ')}.`);
+  if (rule.requiresApproval && eligible.length > MAX_APPROVAL_UNITS) problems.push(`Maksimal ${MAX_APPROVAL_UNITS} unit per pengajuan.`);
   if (type === 'Install' && formCustomer && !(Number(formCustomer.value) > 0)) {
     problems.push(`Nilai sewa customer "${formCustomer.name}" masih Rp 0. Isi dulu di Master Customer supaya kontrak & denda terhitung benar.`);
   }
@@ -173,6 +177,23 @@ export function MovementPage() {
 
   async function handleExecute() {
     setBusy(true);
+    if (rule.requiresApproval) {
+      try {
+        await requestMovementApproval({
+          type, toStatus, assets: eligible, customer: formCustomer, location: locations.find(l => l.id === locationId) || null,
+          transactionDate, notes, picName, technicianName, details,
+        }, { childrenOf, customerById, approvalByAsset });
+        toast(`Pengajuan ${rule.label} untuk ${eligible.length} unit dikirim. Lengkapi bukti pendukung di menu Persetujuan; unit dieksekusi setelah disetujui Admin / Management.`);
+        resetForm();
+        go('approvals', { tab: 'open' });
+      } catch (error) {
+        console.error(error);
+        toast(describeError(error), 'error');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     try {
       const result = await executeMovement(
         {
@@ -181,7 +202,7 @@ export function MovementPage() {
           transactionDate, notes, picName, technicianName, details, unitTidMid,
           damagedParts: Object.fromEntries((Object.entries(damaged) as [string, string[]][]).map(([id, ids]) => [id, ids.map(p => partById.get(p)).filter(Boolean) as Part[]])),
         },
-        { childrenOf, customerById },
+        { childrenOf, customerById, approvalByAsset },
       );
       toast(
         `${rule.label}: ${result.count} unit berhasil diproses.` +
@@ -458,7 +479,7 @@ export function MovementPage() {
               )}
 
               <button type="submit" disabled={busy || problems.length > 0} className={cn(btnPrimary, 'w-full py-3')}>
-                Lanjut: Konfirmasi {eligible.length > 0 && `(${eligible.length} unit)`}
+                {rule.requiresApproval ? 'Lanjut: Ajukan Persetujuan' : 'Lanjut: Konfirmasi'} {eligible.length > 0 && `(${eligible.length} unit)`}
                 <ArrowRight size={16} />
               </button>
             </form>
@@ -506,6 +527,7 @@ export function MovementPage() {
                   )}
                   {movementDetailText(move) && <p className="text-[11px] text-brand-text-main font-medium">{movementDetailText(move)}</p>}
                   {move.notes && <p className="text-[11px] text-brand-text-muted italic">"{move.notes}"</p>}
+                  <Attachments parentType="movement" parentId={move.id} defaultLabel={move.baGenerated ? 'BA bertanda tangan' : 'Foto unit / instalasi'} />
                   <div className="flex items-center justify-between gap-2 pt-0.5">
                     <span className="flex items-center gap-1.5 text-[10px] font-bold text-brand-text-muted uppercase tracking-wide"><User size={10} />{move.userName || 'System'}</span>
                     {move.baGenerated && (
@@ -560,6 +582,12 @@ export function MovementPage() {
             </div>
           )}
 
+          {rule.requiresApproval && (
+            <p className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 font-medium">
+              Pergerakan ini butuh persetujuan Admin / Management lain. Setelah dikirim, unit terkunci sampai pengajuan disetujui dan dieksekusi, atau dibatalkan.
+            </p>
+          )}
+
           {rule.ba ? (
             <div className="grid grid-cols-2 gap-4">
               <Field label={`Nama PIC Customer${needsPic ? '' : ' (opsional)'}`}>
@@ -577,7 +605,7 @@ export function MovementPage() {
           <div className="flex gap-3">
             <button type="button" disabled={busy} onClick={() => setShowConfirm(false)} className={cn(btnSecondary, 'flex-1 py-3')}>Kembali</button>
             <button type="button" disabled={confirmBlocked} onClick={handleExecute} className={cn(btnPrimary, 'flex-1 py-3')}>
-              {busy ? 'Memproses...' : 'Simpan Pergerakan'}
+              {busy ? 'Memproses...' : rule.requiresApproval ? 'Kirim Pengajuan' : 'Simpan Pergerakan'}
             </button>
           </div>
         </div>

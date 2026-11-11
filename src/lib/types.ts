@@ -68,6 +68,8 @@ export interface Asset {
   disposalMethod?: string;
   disposalDate?: string;
   disposalValue?: number;
+  /** Pengajuan terakhir yang menyetujui perubahan status unit ini. */
+  lastApprovalId?: string;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   lastUpdatedBy?: string;
@@ -192,4 +194,53 @@ export interface UserProfile {
   status?: 'Active' | 'Inactive';
   /** true = user wajib mengganti password sementara saat login berikutnya. */
   mustChangePassword?: boolean;
+}
+
+/** Pengajuan yang wajib disetujui orang lain sebelum dieksekusi (maker-checker). */
+export interface Approval {
+  id: string;
+  /** Tipe pergerakan, atau 'Cancel Termination'. */
+  type: string;
+  assetIds: string[];
+  assetSns: string[];
+  /** Data pergerakan yang akan dieksekusi setelah disetujui. */
+  request: {
+    toStatus?: string;
+    customerId?: string | null;
+    locationId?: string | null;
+    transactionDate: string;
+    notes?: string;
+    picName?: string;
+    technicianName?: string;
+    details?: Record<string, unknown>;
+  };
+  /** Ringkasan untuk pemeriksa, mis. total denda. */
+  summary?: string;
+  estimatedPenalty?: number;
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Cancelled' | 'Executed';
+  requestedBy: string;
+  requestedByName?: string;
+  requestedAt?: Timestamp;
+  decidedBy?: string;
+  decidedByName?: string;
+  decidedAt?: Timestamp;
+  decisionNote?: string;
+  executedBy?: string;
+  executedByName?: string;
+  executedAt?: Timestamp;
+  baNumber?: string | null;
+}
+
+export interface Attachment {
+  id: string;
+  parentType: 'movement' | 'approval' | 'asset';
+  parentId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  /** Kategori bebas, mis. "BA bertanda tangan", "Foto instalasi". */
+  label?: string;
+  uploadedBy: string;
+  uploadedByName?: string;
+  uploadedAt?: Timestamp;
 }

@@ -228,7 +228,9 @@ describe('pengadaan & lifecycle', () => {
   it('status baru (siap pasang, diretur ke supplier) & data pengadaan diterima', async () => {
     const db = asUser('ops', 'ops@x.co');
     await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Staged / Ready', tid: 'T1' }));
-    await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Returned to Supplier', purchasePrice: 2500000, poNumber: 'PO-1' }));
+    await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Damaged', purchasePrice: 2500000, poNumber: 'PO-1' }));
+    // status akhir tanpa pengajuan yang disetujui ditolak
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Returned to Supplier' }));
     await assertFails(updateDoc(doc(db, 'edcs/e1'), { purchasePrice: -1 }));
   });
 
@@ -244,6 +246,129 @@ describe('pengadaan & lifecycle', () => {
   it('log pergerakan: biaya tidak boleh negatif', async () => {
     await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'movements/x'), movement('ops', { cost: -5 })));
     await assertSucceeds(setDoc(doc(asUser('ops', 'ops@x.co'), 'movements/y'), movement('ops', { cost: 150000, referenceNo: 'TKT-1' })));
+  });
+});
+
+describe('persetujuan (maker-checker)', () => {
+  const approval = (uid: string, extra: Record<string, unknown> = {}) => ({
+    type: 'Disposal', assetIds: ['e1'], assetSns: ['SN-1'], request: { transactionDate: '2026-01-01' }, summary: 'x',
+    status: 'Pending', requestedBy: uid, requestedByName: uid, requestedAt: serverTimestamp(), ...extra,
+  });
+  const seedApproval = (status: string, extra: Record<string, unknown> = {}) => env.withSecurityRulesDisabled(ctx =>
+    setDoc(doc(ctx.firestore(), 'approvals/a1'), { type: 'Disposal', assetIds: ['e1'], assetSns: ['SN-1'], status, requestedBy: 'ops', request: {}, ...extra }));
+
+  it('pengajuan: role operasional atas nama sendiri, status awal Pending', async () => {
+    await assertSucceeds(setDoc(doc(asUser('ops', 'ops@x.co'), 'approvals/x'), approval('ops')));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'approvals/y'), approval('ops', { status: 'Approved' })));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'approvals/z'), approval('admin')));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'approvals/w'), approval('ops', { type: 'Install' })));
+    await assertFails(setDoc(doc(asUser('mgmt', 'mgmt@krispo-edc.local'), 'approvals/v'), approval('mgmt')));
+  });
+
+  it('keputusan: Admin / Management, bukan pengaju sendiri', async () => {
+    await seedApproval('Pending');
+    const decide = (status: string, uid: string) => ({ status, decidedBy: uid, decidedByName: uid, decidedAt: serverTimestamp(), decisionNote: 'ok' });
+    await assertFails(updateDoc(doc(asUser('ops', 'ops@x.co'), 'approvals/a1'), decide('Approved', 'ops')));
+    await assertFails(updateDoc(doc(asUser('wh', 'wh@x.co'), 'approvals/a1'), decide('Approved', 'wh')));
+    await assertFails(updateDoc(doc(asUser('mgmt', 'mgmt@krispo-edc.local'), 'approvals/a1'), { ...decide('Approved', 'mgmt'), type: 'Lost' }));
+    await assertSucceeds(updateDoc(doc(asUser('mgmt', 'mgmt@krispo-edc.local'), 'approvals/a1'), decide('Approved', 'mgmt')));
+  });
+
+  it('admin yang mengajukan tidak bisa menyetujui pengajuannya sendiri', async () => {
+    await seedApproval('Pending', { requestedBy: 'admin' });
+    await assertFails(updateDoc(doc(asUser('admin', 'admin@x.co'), 'approvals/a1'), { status: 'Approved', decidedBy: 'admin', decidedAt: serverTimestamp() }));
+  });
+
+  it('status akhir unit ditolak tanpa pengajuan yang disetujui', async () => {
+    const db = asUser('ops', 'ops@x.co');
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Retired' }));
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Lost' }));
+    await assertFails(updateDoc(doc(asUser('admin', 'admin@x.co'), 'edcs/e1'), { status: 'Retired' }));
+    await seedApproval('Pending');
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Retired', lastApprovalId: 'a1' }));
+    await seedApproval('Approved');
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Lost', lastApprovalId: 'a1' })); // tipe tidak cocok
+    await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Retired', lastApprovalId: 'a1' }));
+    await assertFails(setDoc(doc(db, 'edcs/new'), asset({ sn: 'NEW', status: 'Retired' })));
+  });
+
+  it('pengajuan yang disetujui hanya berlaku untuk unitnya sendiri (dan SIM/peripheral-nya)', async () => {
+    await env.withSecurityRulesDisabled(async ctx => {
+      await setDoc(doc(ctx.firestore(), 'edcs/e2'), asset({ sn: 'SN-2' }));
+      await setDoc(doc(ctx.firestore(), 'edcs/sim1'), asset({ sn: 'SIM-1', assetType: 'sim', parentDeviceId: 'e1' }));
+    });
+    await seedApproval('Approved');
+    const db = asUser('ops', 'ops@x.co');
+    await assertFails(updateDoc(doc(db, 'edcs/e2'), { status: 'Retired', lastApprovalId: 'a1' }));
+    await assertSucceeds(updateDoc(doc(db, 'edcs/sim1'), { status: 'Retired', lastApprovalId: 'a1' }));
+  });
+
+  it('eksekusi atomik: unit + log + pengajuan ditandai selesai; tidak bisa dipakai ulang', async () => {
+    await seedApproval('Approved');
+    const db = asUser('ops', 'ops@x.co');
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'edcs/e1'), { status: 'Retired', lastApprovalId: 'a1' });
+    batch.set(doc(db, 'movements/m-dsp'), movement('ops', { type: 'Disposal', approvalId: 'a1' }));
+    batch.update(doc(db, 'approvals/a1'), { status: 'Executed', executedBy: 'ops', executedByName: 'ops', executedAt: serverTimestamp(), baNumber: 'BA/DSP/1' });
+    await assertSucceeds(batch.commit());
+    await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'edcs/e1'), asset({ status: 'Available in Warehouse' })));
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Retired', lastApprovalId: 'a1' }));
+  });
+
+  it('log pergerakan tipe persetujuan wajib merujuk pengajuan yang disetujui', async () => {
+    const db = asUser('ops', 'ops@x.co');
+    await assertFails(setDoc(doc(db, 'movements/x1'), movement('ops', { type: 'Disposal' })));
+    await seedApproval('Approved');
+    await assertSucceeds(setDoc(doc(db, 'movements/x2'), movement('ops', { type: 'Disposal', approvalId: 'a1' })));
+    await assertFails(setDoc(doc(db, 'movements/x3'), movement('ops', { type: 'Disposal', approvalId: 'a1', edcId: 'lain' })));
+  });
+
+  it('pemulihan kontrak yang sudah diakhiri butuh pengajuan; pemasangan baru tidak', async () => {
+    await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'edcs/e1'),
+      asset({ status: 'Withdrawn', contractStatus: 'Terminated (Early)', contractStartDate: '2026-01-01T00:00:00.000Z' })));
+    const db = asUser('ops', 'ops@x.co');
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { status: 'Installed / Active', contractStatus: 'Active' }));
+    await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Installed / Active', contractStatus: 'Active', contractStartDate: '2026-06-01T00:00:00.000Z' }));
+  });
+
+  it('pengaju bisa membatalkan; orang lain tidak', async () => {
+    await seedApproval('Approved');
+    await assertFails(updateDoc(doc(asUser('wh', 'wh@x.co'), 'approvals/a1'), { status: 'Cancelled' }));
+    await assertSucceeds(updateDoc(doc(asUser('ops', 'ops@x.co'), 'approvals/a1'), { status: 'Cancelled' }));
+  });
+});
+
+describe('lampiran', () => {
+  const meta = (uid: string, extra: Record<string, unknown> = {}) => ({
+    parentType: 'movement', parentId: 'm1', name: 'ba.pdf', mimeType: 'application/pdf', size: 1000, label: 'BA',
+    uploadedBy: uid, uploadedByName: uid, uploadedAt: serverTimestamp(), ...extra,
+  });
+  const upload = (db: any, id: string, uid: string, extra: Record<string, unknown> = {}, data = 'QUJD') => {
+    const batch = writeBatch(db);
+    batch.set(doc(db, `attachments/${id}`), meta(uid, extra));
+    batch.set(doc(db, `attachment_data/${id}`), { data, uploadedBy: uid });
+    return batch.commit();
+  };
+
+  it('unggah: metadata + isi file bersamaan, atas nama sendiri, format & ukuran divalidasi', async () => {
+    await assertSucceeds(upload(asUser('mgmt', 'mgmt@krispo-edc.local'), 'f1', 'mgmt'));
+    await assertFails(upload(asUser('ops', 'ops@x.co'), 'f2', 'admin'));
+    await assertFails(upload(asUser('ops', 'ops@x.co'), 'f3', 'ops', { mimeType: 'application/x-msdownload' }));
+    await assertFails(upload(asUser('ops', 'ops@x.co'), 'f4', 'ops', { size: 5_000_000 }));
+    await assertFails(upload(asUser('ops', 'ops@x.co'), 'f5', 'ops', {}, 'x'.repeat(1_000_001)));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'attachments/f6'), meta('ops')));
+    await assertFails(upload(asUser('stranger', 'orang@krispo-edc.local'), 'f7', 'stranger'));
+  });
+
+  it('lampiran tidak bisa diubah; hapus oleh pengunggah (24 jam) atau Admin', async () => {
+    await upload(asUser('ops', 'ops@x.co'), 'f1', 'ops');
+    await assertFails(updateDoc(doc(asUser('ops', 'ops@x.co'), 'attachments/f1'), { name: 'lain.pdf' }));
+    await assertFails(deleteDoc(doc(asUser('wh', 'wh@x.co'), 'attachments/f1')));
+    const db = asUser('ops', 'ops@x.co');
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'attachment_data/f1'));
+    batch.delete(doc(db, 'attachments/f1'));
+    await assertSucceeds(batch.commit());
   });
 });
 

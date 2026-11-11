@@ -250,6 +250,10 @@
         },
         "disposalValue": {
           "type": "number"
+        },
+        "lastApprovalId": {
+          "type": "string",
+          "description": "Approval that authorized the latest closing status change"
         }
       },
       "required": [
@@ -538,6 +542,9 @@
         },
         "mid": {
           "type": "string"
+        },
+        "approvalId": {
+          "type": "string"
         }
       },
       "required": [
@@ -666,6 +673,138 @@
         "brand",
         "model"
       ]
+    },
+    "approval": {
+      "title": "Approval",
+      "description": "Maker-checker request for risky movements (Disposal, Lost, Return to Supplier, Cancel Termination).",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "assetIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assetSns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "request": {
+          "type": "object",
+          "description": "Movement parameters executed after approval"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "estimatedPenalty": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Pending",
+            "Approved",
+            "Rejected",
+            "Cancelled",
+            "Executed"
+          ]
+        },
+        "requestedBy": {
+          "type": "string"
+        },
+        "requestedByName": {
+          "type": "string"
+        },
+        "requestedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "decidedBy": {
+          "type": "string"
+        },
+        "decidedByName": {
+          "type": "string"
+        },
+        "decidedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "decisionNote": {
+          "type": "string"
+        },
+        "executedBy": {
+          "type": "string"
+        },
+        "executedByName": {
+          "type": "string"
+        },
+        "executedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "baNumber": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "assetIds",
+        "status",
+        "requestedBy"
+      ]
+    },
+    "attachment": {
+      "title": "Attachment",
+      "description": "File metadata. Content (base64) is stored in attachment_data/{same id}.",
+      "type": "object",
+      "properties": {
+        "parentType": {
+          "type": "string",
+          "enum": [
+            "movement",
+            "approval",
+            "asset"
+          ]
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "label": {
+          "type": "string"
+        },
+        "uploadedBy": {
+          "type": "string"
+        },
+        "uploadedByName": {
+          "type": "string"
+        },
+        "uploadedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "parentType",
+        "parentId",
+        "name",
+        "mimeType",
+        "size",
+        "uploadedBy"
+      ]
     }
   },
   "firestore": {
@@ -704,6 +843,17 @@
     "device_models/{modelId}": {
       "schema": "deviceModel",
       "description": "Device brands & types"
+    },
+    "approvals/{approvalId}": {
+      "schema": "approval",
+      "description": "Maker-checker requests"
+    },
+    "attachments/{attachmentId}": {
+      "schema": "attachment",
+      "description": "Attachment metadata"
+    },
+    "attachment_data/{attachmentId}": {
+      "description": "Attachment content: { data: base64, uploadedBy }"
     }
   }
 }

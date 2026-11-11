@@ -65,7 +65,7 @@ function UnitPicker({ label, value, onChange, candidates, emptyHint }: {
 }
 
 export function SwapForm() {
-  const { assets, locations, childrenOf, customerById } = useData();
+  const { assets, locations, childrenOf, customerById, approvalByAsset } = useData();
   const { profile } = useAuth();
   const { toast, confirm } = useFeedback();
 
@@ -82,8 +82,8 @@ export function SwapForm() {
   const [technicianName, setTechnicianName] = useState(profile?.displayName || profile?.username || '');
   const [busy, setBusy] = useState(false);
 
-  const installed = useMemo(() => assets.filter(a => a.assetType === 'perangkat' && a.status === STATUS.INSTALLED && a.contractStatus === 'Active'), [assets]);
-  const stock = useMemo(() => assets.filter(a => a.assetType === 'perangkat' && SWAP_IN_STATUSES.includes(a.status)), [assets]);
+  const installed = useMemo(() => assets.filter(a => a.assetType === 'perangkat' && a.status === STATUS.INSTALLED && a.contractStatus === 'Active' && !approvalByAsset.has(a.id)), [assets, approvalByAsset]);
+  const stock = useMemo(() => assets.filter(a => a.assetType === 'perangkat' && SWAP_IN_STATUSES.includes(a.status) && !approvalByAsset.has(a.id)), [assets, approvalByAsset]);
   // Lokasi unit lama setelah dilepas: gudang untuk ditarik, service center untuk perbaikan.
   const oldLocationOptions = locations.filter(l => l.type === (oldTo === STATUS.REPAIR ? 'Service Center' : 'Warehouse'));
   const live = (a?: Asset) => (a ? assets.find(x => x.id === a.id) : undefined);
@@ -94,6 +94,7 @@ export function SwapForm() {
   const problems: string[] = [];
   const problem = swapProblem(oldLive, newLive);
   if (problem) problems.push(problem);
+  for (const a of [oldLive, newLive]) if (a && approvalByAsset.has(a.id)) problems.push(`Unit ${a.sn} sedang dalam pengajuan persetujuan.`);
   if (!transactionDate || transactionDate > today()) problems.push('Tanggal transaksi tidak valid.');
   if (!technicianName.trim()) problems.push('Isi nama teknisi.');
   if (!picName.trim()) problems.push('Isi nama PIC merchant untuk Berita Acara.');

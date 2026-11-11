@@ -8,6 +8,7 @@ import { contractHealth } from '../lib/contract';
 import { cn, daysBetween, formatDate, formatIDR } from '../lib/utils';
 import type { Movement } from '../lib/types';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { useNav } from '../context/NavContext';
 import { PageHeader, StatusBadge } from '../components/ui';
 
@@ -19,7 +20,8 @@ const TABS: { id: AssetType; icon: React.ElementType }[] = [
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
 export function Dashboard() {
-  const { assets, assetById } = useData();
+  const { assets, assetById, openApprovals } = useData();
+  const { can, user } = useAuth();
   const { go } = useNav();
   const [tab, setTab] = useState<AssetType>('perangkat');
   const [recent, setRecent] = useState<Movement[]>([]);
@@ -88,7 +90,11 @@ export function Dashboard() {
     { title: 'Perlu Tindakan', value: stats.problem, color: 'bg-red-500', text: 'text-red-600', icon: Wrench, status: 'problem' },
   ];
 
+  const toDecide = openApprovals.filter(a => a.status === 'Pending' && can('approvals.decide') && a.requestedBy !== user?.uid).length;
+  const toExecute = openApprovals.filter(a => a.status === 'Approved' && can('movements.create')).length;
   const alerts = [
+    { show: toDecide > 0, text: `${toDecide} pengajuan menunggu persetujuan Anda`, onClick: () => go('approvals') },
+    { show: toExecute > 0, text: `${toExecute} pengajuan sudah disetujui dan siap dieksekusi`, onClick: () => go('approvals') },
     { show: attention.ending > 0, text: `${attention.ending} kontrak berakhir dalam 30 hari`, onClick: () => go('contracts', { health: 'ending' }) },
     { show: attention.penaltyUnits > 0, text: `${attention.penaltyUnits} unit punya denda tercatat, total ${formatIDR(attention.penalties)}`, onClick: () => go('contracts', { health: 'terminated' }) },
     { show: attention.incoming > 0, text: `${attention.incoming} perangkat dari supplier menunggu QC`, onClick: () => go('inventory', { section: 'perangkat', status: STATUS.INCOMING }) },

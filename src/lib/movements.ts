@@ -3,7 +3,7 @@ import {
 } from 'firebase/firestore';
 import { actorName, auth, db } from './firebase';
 import {
-  ALL_STATUSES, CLOSED_STATUSES, CONTRACT_STATUS, MOVEMENT_FIELD_LABEL, REFERENCE_LABEL, STATUS, SWAP_IN_STATUSES, SWAP_OUT_STATUSES,
+  ALL_STATUSES, APPROVAL_STATUS, CLOSED_STATUSES, CONTRACT_STATUS, MAX_APPROVAL_UNITS, approvalTypeLabel, MOVEMENT_FIELD_LABEL, REFERENCE_LABEL, STATUS, SWAP_IN_STATUSES, SWAP_OUT_STATUSES,
   movementLabel, movementRule, statusMeta, type AssetStatus, type MovementField, type MovementRule, type MovementType,
 } from './constants';
 import { buildInstallContract, calcTermination } from './contract';
@@ -49,11 +49,15 @@ export interface MovementRequest {
   details?: MovementDetails;
   /** Khusus Staging: TID / MID per unit (key = asset id). */
   unitTidMid?: Record<string, { tid: string; mid: string }>;
+  /** Wajib untuk pergerakan yang butuh persetujuan: id pengajuan yang sudah disetujui. */
+  approvalId?: string;
 }
 
 interface Lookup {
   childrenOf: (deviceId: string) => Asset[];
   customerById: Map<string, Customer>;
+  /** Unit yang terkunci pengajuan lain (opsional). */
+  approvalByAsset?: Map<string, { id: string; type: string; status: string }>;
 }
 
 export interface Blocked { asset: Asset; reason: string }
@@ -79,12 +83,18 @@ export const endsContract = (rule: MovementRule, asset: Asset) =>
   !!rule.terminatesContract && asset.status === STATUS.INSTALLED && asset.contractStatus === CONTRACT_STATUS.ACTIVE;
 
 /** Pisahkan unit yang boleh diproses dan yang ditolak beserta alasannya. */
-export function checkEligibility(rule: MovementRule, assets: Asset[]): { eligible: Asset[]; blocked: Blocked[] } {
+export function checkEligibility(
+  rule: MovementRule, assets: Asset[],
+  locks?: Map<string, { id: string; type: string; status: string }>, exemptApprovalId?: string,
+): { eligible: Asset[]; blocked: Blocked[] } {
   const eligible: Asset[] = [];
   const blocked: Blocked[] = [];
 
   for (const asset of assets) {
-    if (asset.assetType !== 'perangkat') {
+    const lock = locks?.get(asset.id);
+    if (lock && lock.id !== exemptApprovalId) {
+      blocked.push({ asset, reason: `sedang dalam pengajuan ${approvalTypeLabel(lock.type)} (${lock.status === 'Pending' ? 'menunggu persetujuan' : 'menunggu eksekusi'})` });
+    } else if (asset.assetType !== 'perangkat') {
       blocked.push({ asset, reason: 'SIM / peripheral mengikuti perangkat induknya' });
     } else if (!ALL_STATUSES.includes(asset.status as AssetStatus)) {
       // Data lama bisa punya status bebas (mis. dari import Excel versi lama).
@@ -179,6 +189,11 @@ function detailLines(type: string, details: MovementDetails): string[] {
 
 const VISIT_TYPES: MovementType[] = ['Install', 'Relocation', 'Maintenance'];
 
+function executedFields(baNumber: string | null) {
+  const user = auth.currentUser!;
+  return { status: APPROVAL_STATUS.EXECUTED, executedBy: user.uid, executedByName: actorName(), executedAt: serverTimestamp(), baNumber };
+}
+
 export interface MovementResult { count: number; baNumber: string | null; totalPenalty: number }
 
 export async function executeMovement(req: MovementRequest, lookup: Lookup): Promise<MovementResult> {
@@ -190,8 +205,10 @@ export async function executeMovement(req: MovementRequest, lookup: Lookup): Pro
   if (!rule.keepStatus && !rule.to.includes(req.toStatus)) throw new Error('Status tujuan tidak valid untuk tipe pergerakan ini.');
   if (req.assets.length === 0) throw new Error('Belum ada unit yang dipilih.');
 
-  const { blocked } = checkEligibility(rule, req.assets);
+  const { blocked } = checkEligibility(rule, req.assets, lookup.approvalByAsset, req.approvalId);
   if (blocked.length > 0) throw new Error(`${blocked.length} unit tidak bisa diproses: ${blocked[0].asset.sn} (${blocked[0].reason}).`);
+  if (rule.requiresApproval && !req.approvalId) throw new Error(`${rule.label} wajib diajukan dan disetujui lebih dulu.`);
+  if (req.approvalId && req.assets.length > MAX_APPROVAL_UNITS) throw new Error(`Maksimal ${MAX_APPROVAL_UNITS} unit per pengajuan.`);
   if (rule.customer === 'required' && !req.customer) throw new Error('Customer wajib dipilih untuk pergerakan ini.');
   if (rule.locationRequired && !req.location) throw new Error('Lokasi tujuan wajib dipilih.');
   const missing = missingDetails(rule, req.details);
@@ -223,6 +240,8 @@ export async function executeMovement(req: MovementRequest, lookup: Lookup): Pro
   const sharedFor = (asset: Asset) => {
     const toStatus = rule.keepStatus ? asset.status : req.toStatus;
     const shared: Record<string, unknown> = { status: toStatus, updatedAt: serverTimestamp(), lastUpdatedBy: user.uid };
+    // Rules memeriksa pengajuan ini untuk perubahan status yang butuh persetujuan.
+    if (req.approvalId) shared.lastApprovalId = req.approvalId;
     if (toStatus !== asset.status) shared.statusSince = txDate.toISOString();
     if (rule.customer === 'required') {
       shared.currentCustomerId = req.customer!.id;
@@ -340,6 +359,7 @@ export async function executeMovement(req: MovementRequest, lookup: Lookup): Pro
           : null,
         linkedAssets: children.map(c => ({ sn: c.sn, type: c.assetType === 'sim' ? 'SIM' : c.peripheralType || 'Peripheral' })),
         ...log,
+        approvalId: req.approvalId,
         timestamp: serverTimestamp(),
         userId: user.uid,
         userName: actorName(),
@@ -348,6 +368,8 @@ export async function executeMovement(req: MovementRequest, lookup: Lookup): Pro
       inBatch++;
       i++;
     }
+    // Pengajuan ditandai selesai di batch terakhir, atomik dengan perubahan unitnya.
+    if (req.approvalId && i >= units.length) batch.update(doc(db, 'approvals', req.approvalId), executedFields(baNumber));
     try {
       await batch.commit();
       processed += inBatch;
@@ -597,7 +619,9 @@ export async function redownloadBA(move: Movement, assetById: Map<string, Asset>
  * Batalkan pengakhiran kontrak: unit kembali terpasang di customer kontraknya,
  * denda dihapus, dan SIM / peripheral tertaut ikut dipulihkan.
  */
-export async function cancelTermination(assets: Asset[], lookup: Lookup): Promise<number> {
+export async function cancelTermination(assets: Asset[], lookup: Lookup, approvalId?: string): Promise<number> {
+  if (!approvalId) throw new Error('Batal pengakhiran kontrak wajib diajukan dan disetujui lebih dulu.');
+  if (assets.length > MAX_APPROVAL_UNITS) throw new Error(`Maksimal ${MAX_APPROVAL_UNITS} unit per pengajuan.`);
   const user = auth.currentUser;
   if (!user) throw new Error('Sesi login berakhir. Silakan login ulang.');
 
@@ -607,6 +631,7 @@ export async function cancelTermination(assets: Asset[], lookup: Lookup): Promis
     throw new Error(`Unit ${notWithdrawn.sn} sudah berpindah status (${statusMeta(notWithdrawn.status).label}) sejak ditarik, sehingga pengakhirannya tidak bisa dibatalkan.`);
   }
 
+  if (targets.length === 0) throw new Error('Tidak ada kontrak yang bisa dipulihkan pada pengajuan ini.');
   const units = targets.map(asset => ({ asset, children: lookup.childrenOf(asset.id) }));
   let i = 0;
   while (i < units.length) {
@@ -620,6 +645,7 @@ export async function cancelTermination(assets: Asset[], lookup: Lookup): Promis
       const shared = {
         status: STATUS.INSTALLED,
         statusSince: new Date().toISOString(),
+        lastApprovalId: approvalId,
         currentCustomerId: customerId,
         customerName,
         currentLocationId: asset.contractLocationId ?? null,
@@ -647,6 +673,7 @@ export async function cancelTermination(assets: Asset[], lookup: Lookup): Promis
         customerId,
         customerName,
         notes: `Pembatalan pengakhiran kontrak. Denda dihapus: ${formatIDR((asset.penaltyAmount || 0) + (asset.partPenaltyAmount || 0))}.`,
+        approvalId,
         transactionDate: new Date().toISOString().slice(0, 10),
         baGenerated: false,
         timestamp: serverTimestamp(),
@@ -657,6 +684,7 @@ export async function cancelTermination(assets: Asset[], lookup: Lookup): Promis
       inBatch++;
       i++;
     }
+    if (i >= units.length) batch.update(doc(db, 'approvals', approvalId), executedFields(null));
     await batch.commit();
   }
   return units.length;

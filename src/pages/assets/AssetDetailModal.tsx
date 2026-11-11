@@ -12,6 +12,8 @@ import type { Asset, Movement } from '../../lib/types';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import { useNav } from '../../context/NavContext';
+import { Attachments } from '../../components/Attachments';
+import { approvalTypeLabel } from '../../lib/constants';
 import { Modal, Spinner, StatusBadge, btnPrimary, btnSecondary, inputClass, useFeedback } from '../../components/ui';
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -25,7 +27,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string | null; onClose: () => void; onEdit: (asset: Asset) => void }) {
   // Selalu baca data live dari context, bukan salinan saat modal dibuka.
-  const { assets, assetById, customerById, childrenOf, locationById } = useData();
+  const { assets, assetById, customerById, childrenOf, locationById, approvalByAsset } = useData();
   const { can } = useAuth();
   const { go, startMovement } = useNav();
   const { toast, confirm } = useFeedback();
@@ -108,6 +110,14 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
       headerExtra={<StatusBadge status={asset.status} />}
     >
       <div className="p-6 space-y-7">
+        {approvalByAsset.get(asset.id) && (() => {
+          const approval = approvalByAsset.get(asset.id)!;
+          return (
+            <button onClick={() => { onClose(); go('approvals', { tab: 'open' }); }} className="w-full text-left p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium">
+              Unit ini sedang dalam pengajuan <b>{approvalTypeLabel(approval.type)}</b> ({approval.status === 'Pending' ? 'menunggu persetujuan' : 'disetujui, menunggu eksekusi'}) oleh {approval.requestedByName}. Pergerakan lain dikunci sampai selesai. Lihat →
+            </button>
+          );
+        })()}
         <div className="flex flex-wrap gap-2">
           {asset.assetType === 'perangkat' && can('movements.create') && (
             <button onClick={() => { onClose(); startMovement([asset.id]); }} className={btnPrimary}><ArrowLeftRight size={14} /> Proses Pergerakan</button>
@@ -215,6 +225,10 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
           </div>
         )}
 
+        <section className="p-4 border border-brand-border rounded-xl">
+          <Attachments parentType="asset" parentId={asset.id} expanded title="Dokumen Unit" defaultLabel="Invoice / dokumen pembelian" hint="Mis. invoice, kartu garansi, foto kondisi unit." />
+        </section>
+
         {/* Tautan SIM / peripheral */}
         {asset.assetType === 'perangkat' ? (
           <section className="space-y-3">
@@ -299,6 +313,7 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
                         <p className="text-[11px] font-bold text-red-600">Denda {formatIDR((move.penaltyAmount || 0) + (move.partPenaltyAmount || 0))}</p>
                       )}
                       {move.notes && <p className="text-[11px] text-brand-text-muted italic">"{move.notes}"</p>}
+                      <Attachments parentType="movement" parentId={move.id} defaultLabel={move.baGenerated ? 'BA bertanda tangan' : 'Foto unit / instalasi'} />
                     </div>
                     {move.baGenerated && (
                       <button
