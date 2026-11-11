@@ -1,28 +1,50 @@
-# Security Specification: EDC Management System
+# Spesifikasi Keamanan - Channel Inventory Management
 
-## 1. Data Invariants
-- EDCs must have a unique Serial Number (SN).
-- Contract calculations (Start/End dates) are automated based on movement types (Install/Withdrawal).
-- Penalty amounts are strictly calculated server-side (in application logic, but rules must ensure identity integrity).
-- Users can only access the system if they have a profile doc matching their UID.
-- Roles determine the extent of write access across collections.
+Semua aturan di dokumen ini ditegakkan oleh `firestore.rules` dan diuji otomatis di `tests/rules.test.ts`
+(`npm run test:rules`). Tampilan aplikasi hanya menyembunyikan tombol; yang benar-benar menjaga data adalah rules.
 
-## 2. The "Dirty Dozen" (Attack Scenarios)
-1. **Identity Spoofing**: A user attempts to create a profile with `role: "Admin"` despite not being authorized.
-2. **State Shortcutting**: A user tries to update an EDC status to "Installed / Active" without going through the `movements` log (though rules can't enforce movement-EDC atomicity perfectly without `existsAfter`, we can restrict status updates to specific roles).
-3. **Price Manipulation**: A user attempts to change the `price` in `edc_parts` to Rp 0.
-4. **Contract Date Forgery**: A user tries to set a backdated `contractStartDate` on an EDC.
-5. **Unauthorized Multi-Account Read**: A user tries to read customers they don't have access to (if we had customer-level multi-tenancy, but here it's role-based access to the whole DB).
-6. **Shadow Field Injection**: Adding `isVerified: true` to a profile doc.
-7. **Resource Poisoning**: Sending a 1MB string as a Serial Number.
-8. **Owner Deletion**: A non-admin user trying to delete a customer or EDC record.
-9. **Movement Drift**: Updating a movement log after it has been created to hide history.
-10. **Role Escalation**: A 'Management' user trying to update their own role to 'Admin'.
-11. **Part Penalty Forgery**: Setting a negative `partPenaltyAmount`.
-12. **PII Leak**: Unauthorized read of `users` collection.
+## 1. Invarian data
 
-## 3. Test Runner (Draft Plan)
-- Test: `get` on `/users/{otherId}` by non-admin should fail.
-- Test: `create` on `/edc_parts` by a 'Service' role should work, but by a 'Warehouse' role should fail (depending on role matrix).
-- Test: `update` on `edcs` allowing only specific fields if the role is restricted.
-- Test: `delete` on any collection by non-admin should fail.
+- Hanya user dengan profil aktif di `/users/{uid}` yang bisa membaca atau menulis data apa pun.
+- Profil hanya bisa dibuat oleh pemilik akun, dengan role dari undangan Admin (`/invites/{email}`) atau `Admin` untuk bootstrap admin. Email harus terverifikasi.
+- Role dan status diri sendiri tidak bisa diubah. Admin tidak bisa mengubah atau menghapus dirinya sendiri (mencegah lockout).
+- Serial number aset tidak bisa diganti setelah terdaftar. Status harus salah satu dari daftar resmi.
+- Nilai uang (denda, sewa, harga part) harus angka dan tidak boleh negatif.
+- Log pergerakan dicatat atas nama user yang login dengan waktu server, dan tidak bisa diedit siapa pun.
+- Hapus data hanya oleh Admin.
+
+## 2. Skenario serangan dan statusnya
+
+| # | Skenario | Status |
+| --- | --- | --- |
+| 1 | Identity spoofing: membuat profil sendiri dengan `role: "Admin"` | Ditolak rules, teruji |
+| 2 | Akun Google mana pun login lalu otomatis dapat akses | Ditolak: wajib undangan, teruji |
+| 3 | Eskalasi role: user mengubah role-nya sendiri | Ditolak rules, teruji |
+| 4 | Shadow field: menyisipkan field tak dikenal di profil (`isVerified: true`) | Ditolak (`hasOnly`), teruji |
+| 5 | Kebocoran PII: user biasa membaca daftar `/users` | Ditolak, hanya Admin, teruji |
+| 6 | Manipulasi harga: `price` part jadi negatif / bukan angka, atau diubah role tak berwenang | Ditolak, teruji |
+| 7 | Denda negatif (`partPenaltyAmount: -5`) | Ditolak, teruji |
+| 8 | Resource poisoning: serial number 1 MB | Ditolak (maks 128 karakter), teruji |
+| 9 | Hapus data oleh non-admin | Ditolak, teruji |
+| 10 | Movement drift: mengedit log pergerakan untuk menutupi riwayat | Ditolak untuk semua role, teruji |
+| 11 | Log palsu atas nama user lain / tanggal server dipalsukan | Ditolak, teruji |
+| 12 | Role read-only (Management) menulis langsung ke Firestore tanpa lewat UI | Ditolak, teruji |
+| 13 | State shortcutting: mengubah status aset tanpa lewat log pergerakan | Sebagian, lihat keterbatasan |
+| 14 | Pemalsuan tanggal kontrak oleh role operasional | Sebagian, lihat keterbatasan |
+
+## 3. Keterbatasan yang diketahui
+
+Aplikasi ini tanpa backend, sehingga logika bisnis berjalan di browser user yang berwenang.
+
+- User dengan role operasional (Operations, Warehouse, Service) secara teknis bisa menulis field aset apa pun yang lolos validasi,
+  termasuk status dan field kontrak, dengan memanggil Firestore langsung. Rules membatasi **siapa** dan **bentuk data**,
+  bukan kebenaran hitungan kontrak. Aplikasi sendiri selalu menulis perubahan status bersama log-nya dalam satu batch atomik.
+- Keunikan serial number tidak dijamin database (dicek di aplikasi).
+- Perbaikan menyeluruh untuk dua poin di atas adalah memindahkan pergerakan dan registrasi aset ke Cloud Functions
+  (rules lalu menolak semua tulis status dari client).
+
+## 4. Rekomendasi operasional
+
+- Batasi API key Firebase ke domain aplikasi dan aktifkan App Check.
+- Aktifkan backup terjadwal Firestore (PITR / scheduled backups); fitur "Reset Data Operasional" tidak bisa dibatalkan.
+- Review daftar user dan undangan secara berkala; nonaktifkan akun yang tidak dipakai.

@@ -1,22 +1,28 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Package, ShieldCheck } from 'lucide-react';
 import { signInWithGoogle } from '../lib/firebase';
 import { motion } from 'motion/react';
 
 export function Login() {
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
   const handleSignIn = async () => {
+    setError('');
+    setBusy(true);
     try {
       await signInWithGoogle();
-    } catch (error: any) {
-      if (
-        error.code === 'auth/popup-closed-by-user' ||
-        error.code === 'auth/cancelled-popup-request'
-      ) {
-        // These are expected when the user cancels or closes the popup
-        console.log('Sign-in interaction cancelled by user');
-        return;
-      }
-      console.error('Sign-in error:', error);
+    } catch (err: any) {
+      // Popup ditutup user: bukan error.
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
+      console.error('Sign-in error:', err);
+      setError(
+        err.code === 'auth/popup-blocked'
+          ? 'Popup login diblokir browser. Izinkan popup untuk situs ini lalu coba lagi.'
+          : 'Login gagal. Periksa koneksi internet lalu coba lagi.',
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -42,16 +48,17 @@ export function Login() {
         <div className="bg-white p-8 rounded-2xl border border-brand-border shadow-sm">
           <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-xl mb-8 border border-blue-100">
             <ShieldCheck size={18} className="text-brand-primary shrink-0" />
-            <p className="text-[11px] text-blue-800 font-bold uppercase tracking-wider">Restricted Access • SSO Required</p>
+            <p className="text-[11px] text-blue-800 font-bold uppercase tracking-wider">Akses terbatas • Hanya akun yang diundang Admin</p>
           </div>
 
           <button
             onClick={handleSignIn}
-            className="w-full h-12 bg-brand-text-main text-white rounded-xl flex items-center justify-center gap-3 text-sm font-bold hover:bg-black transition-all active:scale-[0.98] shadow-md shadow-gray-200"
+            disabled={busy}
+            className="w-full h-12 bg-brand-text-main text-white rounded-xl flex items-center justify-center gap-3 text-sm font-bold hover:bg-black transition-all active:scale-[0.98] shadow-md shadow-gray-200 disabled:opacity-60"
           >
-            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/pwa_google_main_logo.png" className="w-5 h-5" alt="Google" />
-            Authenticate via Google
+            {busy ? 'Membuka login Google...' : 'Masuk dengan Google'}
           </button>
+          {error && <p role="alert" className="mt-4 text-xs font-medium text-red-600 text-center">{error}</p>}
 
           <div className="mt-8 text-center pt-6 border-t border-brand-border">
             <p className="text-[9px] text-brand-text-muted uppercase tracking-[0.3em] font-bold">Standard Operating Environment</p>

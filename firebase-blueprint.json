@@ -1,151 +1,544 @@
 {
   "entities": {
     "edc": {
-      "title": "EDC Device",
-      "description": "Represents a single Electronic Data Capture device.",
+      "title": "Asset (EDC device, SIM card, or peripheral)",
+      "description": "A single trackable asset. SIMs and peripherals may be linked to a parent device and then follow its status, customer and location.",
       "type": "object",
       "properties": {
-        "sn": { "type": "string", "description": "Serial Number" },
-        "tid": { "type": "string", "description": "Terminal ID" },
-        "mid": { "type": "string", "description": "Merchant ID" },
-        "vendor": { "type": "string", "description": "Brand / Vendor" },
-        "model": { "type": "string", "description": "Model Name" },
-        "osVersion": { "type": "string", "description": "OS or App Version" },
-        "simNumber": { "type": "string", "description": "SIM Card Number" },
-        "provider": { "type": "string", "description": "SIM Provider" },
-        "imei": { "type": "string", "description": "IMEI / ICCID" },
-        "simCardNumber": { "type": "string", "description": "SIM Card ID / Number" },
-        "chargerIncluded": { "type": "boolean", "description": "Charger availability" },
-        "otherPeripherals": { "type": "string", "description": "Notes on other accessories like cables, case, etc." },
-        "status": { 
-          "type": "string", 
-          "enum": ["Incoming Stock", "Available in Warehouse", "Reserved / Allocated", "In Delivery", "Installed / Active", "Relocated", "Withdrawn", "Under Repair", "Damaged", "Lost", "Retired"],
+        "sn": {
+          "type": "string",
+          "description": "Serial Number"
+        },
+        "tid": {
+          "type": "string",
+          "description": "Terminal ID"
+        },
+        "mid": {
+          "type": "string",
+          "description": "Merchant ID"
+        },
+        "vendor": {
+          "type": "string",
+          "description": "Brand / Vendor"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model Name"
+        },
+        "osVersion": {
+          "type": "string",
+          "description": "OS or App Version"
+        },
+        "provider": {
+          "type": "string",
+          "description": "SIM Provider"
+        },
+        "imei": {
+          "type": "string",
+          "description": "IMEI / ICCID"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Incoming Stock",
+            "Available in Warehouse",
+            "Reserved / Allocated",
+            "In Delivery",
+            "Installed / Active",
+            "Withdrawn",
+            "Under Repair",
+            "Damaged",
+            "Lost",
+            "Retired"
+          ],
           "description": "Current status of the device"
         },
-        "condition": { "type": "string", "enum": ["New", "Good", "Damaged"], "description": "Physical condition" },
-        "purchaseDate": { "type": "string", "format": "date", "description": "Date of acquisition" },
-        "purchasePrice": { "type": "number", "description": "Acquisition cost" },
-        "currentLocationId": { "type": "string", "description": "Reference to location" },
-        "currentCustomerId": { "type": "string", "description": "Reference to customer" },
-        "customerName": { "type": "string", "description": "Denormalized customer name" },
-        "contractStartDate": { "type": "string", "format": "date-time" },
-        "expectedEndDate": { "type": "string", "format": "date-time" },
-        "contractEndDateActual": { "type": "string", "format": "date-time" },
-        "contractStatus": { "type": "string", "enum": ["Active", "Terminated (Normal)", "Terminated (Early)"] },
-        "penaltyAmount": { "type": "number" },
-        "partPenaltyAmount": { "type": "number" },
-        "currentMonthlyRental": { "type": "number" },
-        "damagedParts": { "type": "array", "items": { "type": "string" } },
-        "lastUpdatedBy": { "type": "string", "description": "UID of user who last updated" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "condition": {
+          "type": "string",
+          "enum": [
+            "New",
+            "Refurbished",
+            "Second"
+          ],
+          "description": "Physical condition"
+        },
+        "currentLocationId": {
+          "type": "string",
+          "description": "Reference to location"
+        },
+        "currentCustomerId": {
+          "type": "string",
+          "description": "Reference to customer"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Denormalized customer name"
+        },
+        "contractStartDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expectedEndDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contractEndDateActual": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "contractStatus": {
+          "type": "string",
+          "enum": [
+            "Active",
+            "Terminated (Normal)",
+            "Terminated (Early)"
+          ]
+        },
+        "penaltyAmount": {
+          "type": "number"
+        },
+        "partPenaltyAmount": {
+          "type": "number"
+        },
+        "currentMonthlyRental": {
+          "type": "number"
+        },
+        "damagedParts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lastUpdatedBy": {
+          "type": "string",
+          "description": "UID of user who last updated"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "assetType": {
+          "type": "string",
+          "enum": [
+            "perangkat",
+            "sim",
+            "peripheral"
+          ]
+        },
+        "msisdn": {
+          "type": "string"
+        },
+        "simType": {
+          "type": "string",
+          "enum": [
+            "Public",
+            "Private"
+          ]
+        },
+        "peripheralType": {
+          "type": "string",
+          "enum": [
+            "Charger",
+            "Battery",
+            "Modem",
+            "Dongle",
+            "Lainnya"
+          ]
+        },
+        "parentDeviceId": {
+          "type": "string",
+          "description": "Parent device id (SIM / peripheral only)"
+        },
+        "parentDeviceSN": {
+          "type": "string"
+        },
+        "locationName": {
+          "type": "string",
+          "description": "Denormalized location name"
+        },
+        "contractScheme": {
+          "type": "string"
+        },
+        "contractCustomerId": {
+          "type": "string",
+          "description": "Customer of the current / last contract; kept after withdrawal"
+        },
+        "contractCustomerName": {
+          "type": "string"
+        },
+        "contractLocationId": {
+          "type": "string"
+        },
+        "contractLocationName": {
+          "type": "string"
+        },
+        "remainingMonthsAtTermination": {
+          "type": "number"
+        },
+        "isTerminatedInARO": {
+          "type": "boolean"
+        },
+        "hasBA": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
-      "required": ["sn", "status", "vendor", "model"]
+      "required": [
+        "sn",
+        "status",
+        "assetType"
+      ]
     },
     "customer": {
       "title": "B2B Customer",
       "description": "Enterprise customer or merchant.",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "category": { "type": "string" },
-        "picName": { "type": "string" },
-        "contact": { "type": "string" },
-        "email": { "type": "string", "format": "email" },
-        "address": { "type": "string" },
-        "region": { "type": "string" },
-        "scheme": { "type": "string" },
-        "value": { "type": "number" },
-        "contractDuration": { "type": "number" }
+        "name": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "picName": {
+          "type": "string"
+        },
+        "contact": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "address": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "scheme": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        },
+        "contractDuration": {
+          "type": "number"
+        }
       },
-      "required": ["name", "email"]
+      "required": [
+        "name",
+        "email"
+      ]
     },
     "location": {
       "title": "Location",
       "description": "Warehouses, Merchant Sites, or Service Centers.",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "type": { "type": "string", "enum": ["Warehouse", "Merchant Site", "Service Center"] },
-        "address": { "type": "string" },
-        "customerId": { "type": "string", "description": "Optional link to customer" }
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "Warehouse",
+            "Merchant Site",
+            "Service Center"
+          ]
+        },
+        "address": {
+          "type": "string"
+        },
+        "customerId": {
+          "type": "string",
+          "description": "Owning customer (Merchant Site only)"
+        }
       },
-      "required": ["name", "type"]
+      "required": [
+        "name",
+        "type"
+      ]
     },
     "contract": {
       "title": "Contract",
-      "description": "Service agreement for EDC deployment.",
+      "description": "LEGACY, unused. Contracts now live on each asset document.",
       "type": "object",
       "properties": {
-        "contractNumber": { "type": "string" },
-        "customerId": { "type": "string" },
-        "startDate": { "type": "string", "format": "date" },
-        "endDate": { "type": "string", "format": "date" },
-        "scheme": { "type": "string", "enum": ["Sewa", "Managed Service", "Jual Putus", "Pinjam Pakai", "Konsinyasi"] },
-        "value": { "type": "number" },
-        "sla": { "type": "string" }
+        "contractNumber": {
+          "type": "string"
+        },
+        "customerId": {
+          "type": "string"
+        },
+        "startDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "endDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "scheme": {
+          "type": "string",
+          "enum": [
+            "Sewa",
+            "Managed Service",
+            "Jual Putus",
+            "Pinjam Pakai",
+            "Konsinyasi"
+          ]
+        },
+        "value": {
+          "type": "number"
+        },
+        "sla": {
+          "type": "string"
+        }
       },
-      "required": ["contractNumber", "customerId", "startDate", "endDate"]
+      "required": [
+        "contractNumber",
+        "customerId",
+        "startDate",
+        "endDate"
+      ]
     },
     "movement": {
       "title": "EDC Movement",
       "description": "Log of a single device movement or status change.",
       "type": "object",
       "properties": {
-        "edcId": { "type": "string" },
-        "type": { "type": "string" },
-        "fromStatus": { "type": "string" },
-        "toStatus": { "type": "string" },
-        "fromLocationId": { "type": "string" },
-        "toLocationId": { "type": "string" },
-        "customerId": { "type": "string" },
-        "notes": { "type": "string" },
-        "transactionDate": { "type": "string", "format": "date" },
-        "baGenerated": { "type": "boolean" },
-        "baData": { 
+        "edcId": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "description": "Allocation | Delivery | Install | Relocation | Withdrawal | Repair | Return to Stock | Write-off | Initial stock | Initial stock (Import) | Cancel Termination"
+        },
+        "fromStatus": {
+          "type": "string"
+        },
+        "toStatus": {
+          "type": "string"
+        },
+        "toLocationId": {
+          "type": "string"
+        },
+        "customerId": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "transactionDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "baGenerated": {
+          "type": "boolean"
+        },
+        "baData": {
           "type": "object",
           "properties": {
-            "templateType": { "type": "string" },
-            "generatedAt": { "type": "string", "format": "date-time" },
-            "customerPIC": { "type": "string" },
-            "technician": { "type": "string" }
+            "templateType": {
+              "type": "string"
+            },
+            "generatedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "customerPIC": {
+              "type": "string"
+            },
+            "technician": {
+              "type": "string"
+            },
+            "customerAddress": {
+              "type": "string"
+            }
           }
         },
-        "userId": { "type": "string" },
-        "userName": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "userId": {
+          "type": "string"
+        },
+        "userName": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sn": {
+          "type": "string",
+          "description": "Denormalized serial number"
+        },
+        "customerName": {
+          "type": "string"
+        },
+        "toLocationName": {
+          "type": "string"
+        },
+        "batchId": {
+          "type": "string",
+          "description": "Groups all units processed in one transaction (one BA)"
+        },
+        "baNumber": {
+          "type": "string",
+          "description": "Stable Berita Acara number"
+        },
+        "penaltyAmount": {
+          "type": "number"
+        },
+        "partPenaltyAmount": {
+          "type": "number"
+        },
+        "damagedParts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "linkedAssets": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
       },
-      "required": ["edcId", "type", "timestamp", "userId"]
+      "required": [
+        "edcId",
+        "type",
+        "timestamp",
+        "userId"
+      ]
     },
     "userProfile": {
       "title": "User Profile",
       "description": "Application user role and metadata.",
       "type": "object",
       "properties": {
-        "email": { "type": "string" },
-        "role": { "type": "string", "enum": ["Admin", "Warehouse", "Operations", "Account Manager", "Service", "Management"] },
-        "displayName": { "type": "string" }
+        "email": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "Admin",
+            "Operations",
+            "Warehouse",
+            "Service",
+            "Account Manager",
+            "Management"
+          ]
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "Active",
+            "Inactive"
+          ]
+        }
       },
-      "required": ["email", "role"]
+      "required": [
+        "email",
+        "role",
+        "status"
+      ]
     },
     "edcPart": {
       "title": "EDC Part",
       "description": "Master list of EDC components and replacement prices.",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "price": { "type": "number" },
-        "description": { "type": "string" }
+        "name": {
+          "type": "string"
+        },
+        "price": {
+          "type": "number"
+        },
+        "description": {
+          "type": "string"
+        }
       },
-      "required": ["name", "price"]
+      "required": [
+        "name",
+        "price"
+      ]
+    },
+    "invite": {
+      "title": "User Invite",
+      "description": "Pre-registration of a user by an Admin. Document id is the lowercased email. Claimed (and deleted) on first login.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "Admin",
+            "Operations",
+            "Warehouse",
+            "Service",
+            "Account Manager",
+            "Management"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdBy": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "role"
+      ]
     }
   },
   "firestore": {
-    "edcs/{edcId}": { "schema": "edc", "description": "Collection of EDC devices" },
-    "customers/{customerId}": { "schema": "customer", "description": "Collection of B2B customers" },
-    "locations/{locationId}": { "schema": "location", "description": "Collection of various locations" },
-    "contracts/{contractId}": { "schema": "contract", "description": "Collection of service contracts" },
-    "movements/{movementId}": { "schema": "movement", "description": "Audit trail for device movements" },
-    "users/{userId}": { "schema": "userProfile", "description": "User account details" },
-    "edc_parts/{partId}": { "schema": "edcPart", "description": "Master list of parts" }
+    "edcs/{edcId}": {
+      "schema": "edc",
+      "description": "All assets: devices, SIM cards, peripherals"
+    },
+    "customers/{customerId}": {
+      "schema": "customer",
+      "description": "Collection of B2B customers"
+    },
+    "locations/{locationId}": {
+      "schema": "location",
+      "description": "Collection of various locations"
+    },
+    "contracts/{contractId}": {
+      "schema": "contract",
+      "description": "Legacy, unused"
+    },
+    "movements/{movementId}": {
+      "schema": "movement",
+      "description": "Audit trail for device movements"
+    },
+    "users/{userId}": {
+      "schema": "userProfile",
+      "description": "User account details"
+    },
+    "edc_parts/{partId}": {
+      "schema": "edcPart",
+      "description": "Master list of parts"
+    },
+    "invites/{email}": {
+      "schema": "invite",
+      "description": "Pending user invitations (Admin only)"
+    }
   }
 }

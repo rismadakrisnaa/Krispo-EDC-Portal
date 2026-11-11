@@ -1,18 +1,64 @@
 rules_version = '2';
+
+// =====================================================================
+// Channel Inventory Management - Firestore Security Rules
+//
+// Prinsip:
+//  1. Login Google saja TIDAK cukup. User harus punya profil aktif di
+//     /users/{uid}, yang hanya bisa dibuat lewat undangan Admin
+//     (/invites/{email}) atau oleh bootstrap admin.
+//  2. Role TIDAK PERNAH bisa ditentukan sendiri oleh user.
+//  3. Matriks hak akses di sini harus sama dengan src/lib/constants.ts.
+//  4. Log pergerakan (movements) tidak bisa diubah setelah dibuat.
+// =====================================================================
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 0. Default Deny
-    match /{document=**} {
-      allow read, write: if false;
-    }
 
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
+    // ---------------- Identitas ----------------
     function isSignedIn() {
       return request.auth != null;
     }
 
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email != null && request.auth.token.email_verified == true;
+    }
+
+    // Admin pertama. Harus sama dengan BOOTSTRAP_ADMIN_EMAIL di src/lib/constants.ts.
+    function isBootstrapAdmin() {
+      return isVerified() && myEmail() == 'rismadakrisnaa@gmail.com';
+    }
+
+    function myProfilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function hasActiveProfile() {
+      return isSignedIn() && exists(myProfilePath()) && get(myProfilePath()).data.get('status', 'Active') != 'Inactive';
+    }
+
+    function myRole() {
+      return get(myProfilePath()).data.role;
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() || (hasActiveProfile() && myRole() == 'Admin');
+    }
+
+    // Admin selalu lolos; role lain harus ada di daftar.
+    function hasRole(roles) {
+      return isAdmin() || (hasActiveProfile() && myRole() in roles);
+    }
+
+    // Semua user terdaftar & aktif boleh membaca data operasional.
+    function canRead() {
+      return isBootstrapAdmin() || hasActiveProfile();
+    }
+
+    // ---------------- Helper data ----------------
     function incoming() {
       return request.resource.data;
     }
@@ -21,99 +67,155 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function getUserData() {
-      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
-      return userDoc != null ? userDoc.data : {"role": "None"};
+    function isValidRole(role) {
+      return role in ['Admin', 'Operations', 'Warehouse', 'Service', 'Account Manager', 'Management'];
     }
 
-    function hasRole(roles) {
-      return isSignedIn() && getUserData().role in roles;
+    function optString(data, field, max) {
+      return !(field in data) || data[field] == null || (data[field] is string && data[field].size() <= max);
     }
 
-    function isAdmin() {
-      return isSignedIn() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin') || 
-        request.auth.token.email == 'rismadakrisnaa@gmail.com'
-      );
+    function optAmount(data, field) {
+      return !(field in data) || data[field] == null || (data[field] is number && data[field] >= 0);
     }
 
-    function isValidId(id) {
-      return id is string && id.size() <= 128;
+    function isValidStatus(status) {
+      return status in [
+        'Incoming Stock', 'Available in Warehouse', 'Reserved / Allocated', 'In Delivery',
+        'Installed / Active', 'Withdrawn', 'Under Repair', 'Damaged', 'Lost', 'Retired'
+      ];
     }
 
-    // ===============================================================
-    // Validation Helpers
-    // ===============================================================
-    function isValidEDC(data) {
+    function isValidAsset(data) {
       return data.sn is string && data.sn.size() > 0 && data.sn.size() <= 128 &&
-             (data.status == null || data.status is string);
+             isValidStatus(data.status) &&
+             (!('assetType' in data) || data.assetType in ['perangkat', 'sim', 'peripheral']) &&
+             optString(data, 'vendor', 100) && optString(data, 'model', 100) &&
+             optString(data, 'tid', 64) && optString(data, 'mid', 64) &&
+             optString(data, 'customerName', 200) && optString(data, 'locationName', 200) &&
+             optAmount(data, 'penaltyAmount') && optAmount(data, 'partPenaltyAmount') &&
+             optAmount(data, 'currentMonthlyRental');
     }
 
     function isValidCustomer(data) {
       return data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
-             data.email is string && data.email.size() <= 128;
+             data.email is string && data.email.size() <= 128 &&
+             optAmount(data, 'value') && optAmount(data, 'contractDuration') &&
+             optString(data, 'address', 500) && optString(data, 'picName', 200);
+    }
+
+    function isValidLocation(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             data.type in ['Warehouse', 'Merchant Site', 'Service Center'] &&
+             optString(data, 'address', 500);
     }
 
     function isValidPart(data) {
       return data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
-             data.price is number && data.price >= 0;
+             data.price is number && data.price >= 0 &&
+             optString(data, 'description', 500);
     }
 
-    // ===============================================================
-    // Collection Rules
-    // ===============================================================
+    function isValidMovement(data) {
+      return data.edcId is string && data.edcId.size() <= 128 &&
+             data.type is string && data.type.size() > 0 && data.type.size() <= 64 &&
+             data.userId == request.auth.uid &&
+             data.timestamp == request.time &&
+             optString(data, 'notes', 2000) &&
+             optAmount(data, 'penaltyAmount') && optAmount(data, 'partPenaltyAmount');
+    }
 
-    // Users
+    // ---------------- Users ----------------
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create: if (isSignedIn() && request.auth.uid == userId && 
-                    (incoming().role == 'Admin' || incoming().role == 'Management' || incoming().role == 'User')) || isAdmin();
-      allow update: if isAdmin() || (request.auth.uid == userId && incoming().role == existing().role);
-      allow delete: if isAdmin();
+      // Profil sendiri (dipakai saat login) atau Admin. User biasa tidak bisa melihat daftar user.
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+
+      // Profil hanya bisa dibuat oleh pemilik akun, dengan role yang SUDAH ditentukan:
+      //  - bootstrap admin -> 'Admin'
+      //  - user lain       -> role dari undangan /invites/{email}
+      allow create: if isVerified() && request.auth.uid == userId &&
+                    incoming().keys().hasOnly(['email', 'displayName', 'role', 'status', 'createdAt', 'updatedAt']) &&
+                    incoming().email == myEmail() &&
+                    incoming().status == 'Active' &&
+                    optString(incoming(), 'displayName', 200) &&
+                    (
+                      (isBootstrapAdmin() && incoming().role == 'Admin') ||
+                      (exists(/databases/$(database)/documents/invites/$(myEmail())) &&
+                       incoming().role == get(/databases/$(database)/documents/invites/$(myEmail())).data.role)
+                    );
+
+      // Admin boleh ubah role/status user LAIN. Role & status diri sendiri tidak bisa diubah
+      // (mencegah admin terakhir mengunci dirinya sendiri, dan mencegah eskalasi role).
+      allow update: if incoming().email == existing().email && (
+                      (isAdmin() && request.auth.uid != userId &&
+                       isValidRole(incoming().role) && incoming().status in ['Active', 'Inactive']) ||
+                      (request.auth.uid == userId &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']) &&
+                       optString(incoming(), 'displayName', 200))
+                    );
+
+      allow delete: if isAdmin() && request.auth.uid != userId;
     }
 
-    // EDCs
+    // ---------------- Invites (pra-registrasi user oleh Admin) ----------------
+    // ID dokumen = email (huruf kecil).
+    match /invites/{email} {
+      allow get: if isAdmin() || (isVerified() && myEmail() == email);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() &&
+                            incoming().keys().hasOnly(['email', 'displayName', 'role', 'createdAt', 'createdBy']) &&
+                            incoming().email == email && email == email.lower() && email.size() <= 128 &&
+                            isValidRole(incoming().role) &&
+                            optString(incoming(), 'displayName', 200);
+      // Admin boleh membatalkan; pemilik email menghapus undangannya saat klaim akun.
+      allow delete: if isAdmin() || (isVerified() && myEmail() == email);
+    }
+
+    // ---------------- Aset (perangkat, SIM, peripheral) ----------------
     match /edcs/{edcId} {
-      allow read: if isSignedIn();
-      allow create: if hasRole(['Admin', 'Warehouse', 'Operations', 'Management']) && isValidEDC(incoming());
-      allow update: if (hasRole(['Admin', 'Warehouse', 'Operations', 'Service', 'Management']) && isValidEDC(incoming())) || isAdmin();
+      allow read: if canRead();
+      allow create: if hasRole(['Operations', 'Warehouse']) && isValidAsset(incoming()) &&
+                    incoming().assetType in ['perangkat', 'sim', 'peripheral'];
+      // Serial number tidak bisa diganti setelah terdaftar.
+      allow update: if hasRole(['Operations', 'Warehouse', 'Service']) && isValidAsset(incoming()) &&
+                    incoming().sn == existing().sn;
       allow delete: if isAdmin();
     }
 
-    // Customers
+    // ---------------- Master data ----------------
     match /customers/{customerId} {
-      allow read: if isSignedIn();
-      allow create, update: if (hasRole(['Admin', 'Operations', 'Account Manager', 'Management']) && isValidCustomer(incoming())) || isAdmin();
+      allow read: if canRead();
+      allow create, update: if hasRole(['Operations', 'Account Manager']) && isValidCustomer(incoming());
       allow delete: if isAdmin();
     }
 
-    // Locations
     match /locations/{locationId} {
-      allow read: if isSignedIn();
-      allow create, update: if hasRole(['Admin', 'Warehouse', 'Operations', 'Management']) || isAdmin();
+      allow read: if canRead();
+      allow create, update: if hasRole(['Operations', 'Warehouse']) && isValidLocation(incoming());
       allow delete: if isAdmin();
     }
 
-    // EDC Parts
     match /edc_parts/{partId} {
-      allow read: if isSignedIn();
-      allow create, update: if (hasRole(['Admin', 'Service', 'Operations', 'Management']) && isValidPart(incoming())) || isAdmin();
+      allow read: if canRead();
+      allow create, update: if hasRole(['Operations', 'Service']) && isValidPart(incoming());
       allow delete: if isAdmin();
     }
 
-    // Movements
+    // ---------------- Log pergerakan (audit trail) ----------------
     match /movements/{movementId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn(); // Log entry
-      allow update: if false; // Immutable audit trail
-      allow delete: if isAdmin();
+      allow read: if canRead();
+      // Pencatat harus user yang sedang login, dengan waktu server.
+      allow create: if hasRole(['Operations', 'Warehouse', 'Service']) && isValidMovement(incoming());
+      allow update: if false; // audit trail tidak bisa diedit
+      allow delete: if isAdmin(); // hanya untuk fitur reset data oleh Admin
     }
 
-    // Legacy Contracts (kept for compat, though use edcs lifecycle now)
+    // ---------------- Legacy ----------------
+    // Koleksi lama, tidak dipakai aplikasi (kontrak sekarang melekat per unit di /edcs).
     match /contracts/{contractId} {
-      allow read: if isSignedIn();
-      allow create, update: if hasRole(['Admin', 'Account Manager', 'Operations', 'Management']) || isAdmin();
-      allow delete: if isAdmin();
+      allow read: if canRead();
+      allow write: if isAdmin();
     }
   }
 }

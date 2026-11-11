@@ -1,113 +1,118 @@
-import React, { useState, useEffect } from 'react';
-import { onAuthStateChanged, type User } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from './lib/firebase';
+import React, { lazy, Suspense } from 'react';
+import { Loader2, ShieldOff } from 'lucide-react';
+import { logout } from './lib/firebase';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { DataProvider, useData } from './context/DataContext';
+import { NavProvider, useNav } from './context/NavContext';
+import { FeedbackProvider } from './components/ui';
 import { Layout } from './components/Layout';
-import { Dashboard } from './pages/Dashboard';
-import { EDCList } from './pages/EDCList';
-import { CustomerList } from './pages/CustomerList';
-import { ContractList } from './pages/ContractList';
-import { MovementPage } from './pages/MovementPage';
-import { LocationList } from './pages/LocationList';
-import { MasterParts } from './pages/MasterParts';
-import { Reports } from './pages/Reports';
-import { UserManagement } from './pages/UserManagement';
 import { Login } from './pages/Login';
-import { Loader2 } from 'lucide-react';
 
-export type Page = 'dashboard' | 'inventory' | 'customers' | 'locations' | 'parts' | 'contracts' | 'movements' | 'reports' | 'users';
+// Tiap halaman di-load saat dibuka saja, supaya bundle awal kecil.
+const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
+const EDCList = lazy(() => import('./pages/EDCList').then(m => ({ default: m.EDCList })));
+const MovementPage = lazy(() => import('./pages/MovementPage').then(m => ({ default: m.MovementPage })));
+const ContractList = lazy(() => import('./pages/ContractList').then(m => ({ default: m.ContractList })));
+const CustomerList = lazy(() => import('./pages/CustomerList').then(m => ({ default: m.CustomerList })));
+const LocationList = lazy(() => import('./pages/LocationList').then(m => ({ default: m.LocationList })));
+const MasterParts = lazy(() => import('./pages/MasterParts').then(m => ({ default: m.MasterParts })));
+const UserManagement = lazy(() => import('./pages/UserManagement').then(m => ({ default: m.UserManagement })));
 
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [role, setRole] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [currentPage, setCurrentPage] = useState<Page>('dashboard');
-  const [customerFilter, setCustomerFilter] = useState<string | null>(null);
-  const [preSelectedAssetIds, setPreSelectedAssetIds] = useState<string[]>([]);
+function FullScreenLoader() {
+  return (
+    <div className="h-screen w-screen flex items-center justify-center bg-brand-bg">
+      <Loader2 className="w-8 h-8 animate-spin text-brand-primary" />
+    </div>
+  );
+}
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setUser(user);
-        try {
-          const userDoc = await getDoc(doc(db, 'users', user.uid));
-          if (userDoc.exists()) {
-            setRole(userDoc.data().role);
-          } else {
-            // Default role for first user or new users (Admin if matched email)
-            const isDefaultAdmin = user.email === 'rismadakrisnaa@gmail.com';
-            const newRole = isDefaultAdmin ? 'Admin' : 'Management';
-            await setDoc(doc(db, 'users', user.uid), {
-              email: user.email,
-              role: newRole,
-              displayName: user.displayName
-            });
-            setRole(newRole);
-          }
-        } catch (error) {
-          console.error("Error fetching user role", error);
-        }
-      } else {
-        setUser(null);
-        setRole(null);
-      }
-      setLoading(false);
-    });
+function AccessMessage({ title, message }: { title: string; message: string }) {
+  const { user } = useAuth();
+  return (
+    <div className="min-h-screen bg-brand-bg flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-white p-8 rounded-2xl border border-brand-border shadow-sm text-center">
+        <div className="w-14 h-14 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-4">
+          <ShieldOff size={28} />
+        </div>
+        <h1 className="text-lg font-bold text-brand-text-main mb-2">{title}</h1>
+        <p className="text-sm text-brand-text-muted leading-relaxed mb-1">{message}</p>
+        {user?.email && <p className="text-xs font-bold text-brand-text-main mb-6">{user.email}</p>}
+        <button onClick={logout} className="w-full py-3 bg-brand-text-main text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-black transition-all">
+          Keluar & ganti akun
+        </button>
+      </div>
+    </div>
+  );
+}
 
-    return () => unsubscribe();
-  }, []);
+function CurrentPage() {
+  const { page } = useNav();
+  const { can } = useAuth();
+  const { loading, error } = useData();
 
   if (loading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-gray-50">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+      <div className="flex items-center justify-center py-32">
+        <Loader2 className="w-7 h-7 animate-spin text-brand-primary" />
       </div>
     );
   }
 
-  if (!user) {
-    return <Login />;
-  }
-
-  const handleNavigate = (page: Page, options?: { preSelectedIds?: string[] }) => {
-    setCustomerFilter(null);
-    if (options?.preSelectedIds) {
-      setPreSelectedAssetIds(options.preSelectedIds);
-    } else {
-      setPreSelectedAssetIds([]);
-    }
-    setCurrentPage(page);
-  };
-
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'dashboard': return <Dashboard onNavigate={setCurrentPage} />;
-      case 'inventory': return <EDCList initialFilter={customerFilter} onNavigate={(page, opts?: any) => handleNavigate(page, opts)} />;
-      case 'customers': return (
-        <CustomerList 
-          onViewAssets={(customerId) => {
-            setCustomerFilter(customerId);
-            setCurrentPage('reports');
-          }}
-          onViewContract={(customerId) => {
-            setCustomerFilter(customerId);
-            setCurrentPage('contracts');
-          }}
-        />
-      );
+  const content = (() => {
+    switch (page) {
+      case 'inventory': return <EDCList />;
+      case 'movements': return <MovementPage />;
+      case 'contracts': return <ContractList />;
+      case 'customers': return <CustomerList />;
       case 'locations': return <LocationList />;
       case 'parts': return <MasterParts />;
-      case 'contracts': return <ContractList initialFilter={customerFilter} />;
-      case 'movements': return <MovementPage preSelectedIds={preSelectedAssetIds} />;
-      case 'reports': return <Reports initialCustomerId={customerFilter} />;
-      case 'users': return <UserManagement />;
-      default: return <Dashboard onNavigate={setCurrentPage} />;
+      case 'users': return can('users.manage') ? <UserManagement /> : <Dashboard />;
+      default: return <Dashboard />;
     }
-  };
+  })();
 
   return (
-    <Layout user={user} role={role} currentPage={currentPage} onNavigate={handleNavigate}>
-      {renderPage()}
-    </Layout>
+    <>
+      {error && <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium">{error}</div>}
+      {content}
+    </>
+  );
+}
+
+function Shell() {
+  const { state } = useAuth();
+
+  if (state === 'loading') return <FullScreenLoader />;
+  if (state === 'signed-out') return <Login />;
+  if (state === 'no-access') {
+    return <AccessMessage title="Akun belum terdaftar" message="Login berhasil, tetapi akun ini belum diberi akses. Minta Admin menambahkan email Anda di menu User & Role, lalu login ulang." />;
+  }
+  if (state === 'inactive') {
+    return <AccessMessage title="Akun dinonaktifkan" message="Akses akun ini sudah dinonaktifkan oleh Admin." />;
+  }
+  if (state === 'error') {
+    return <AccessMessage title="Gagal memuat akses" message="Terjadi masalah saat memeriksa hak akses. Periksa koneksi internet lalu coba login ulang." />;
+  }
+
+  return (
+    <DataProvider>
+      <NavProvider>
+        <Layout>
+          <Suspense fallback={<div className="flex items-center justify-center py-32"><Loader2 className="w-7 h-7 animate-spin text-brand-primary" /></div>}>
+            <CurrentPage />
+          </Suspense>
+        </Layout>
+      </NavProvider>
+    </DataProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <FeedbackProvider>
+      <AuthProvider>
+        <Shell />
+      </AuthProvider>
+    </FeedbackProvider>
   );
 }
