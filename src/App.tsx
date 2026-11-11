@@ -28,7 +28,7 @@ function FullScreenLoader() {
   );
 }
 
-function AccessMessage({ title, message }: { title: string; message: string }) {
+function AccessMessage({ title, message, detail }: { title: string; message: string; detail?: string | null }) {
   const { user } = useAuth();
   return (
     <div className="min-h-screen bg-brand-bg flex items-center justify-center p-6">
@@ -38,7 +38,9 @@ function AccessMessage({ title, message }: { title: string; message: string }) {
         </div>
         <h1 className="text-lg font-bold text-brand-text-main mb-2">{title}</h1>
         <p className="text-sm text-brand-text-muted leading-relaxed mb-1">{message}</p>
-        {user?.email && <p className="text-xs font-bold text-brand-text-main mb-6">{usernameFromEmail(user.email)}</p>}
+        {user?.email && <p className="text-xs font-bold text-brand-text-main">{usernameFromEmail(user.email)}</p>}
+        {detail && <p className="mt-3 text-[11px] font-mono text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2 break-all">{detail}</p>}
+        <div className="mb-6" />
         <button onClick={logout} className="w-full py-3 bg-brand-text-main text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-black transition-all">
           Keluar
         </button>
@@ -101,7 +103,7 @@ function ForcePasswordChange() {
 }
 
 function Shell() {
-  const { state, profile } = useAuth();
+  const { state, profile, errorCode } = useAuth();
 
   if (state === 'loading') return <FullScreenLoader />;
   if (state === 'signed-out') return <Login />;
@@ -112,7 +114,16 @@ function Shell() {
     return <AccessMessage title="Akun dinonaktifkan" message="Akses akun ini sudah dinonaktifkan oleh Admin." />;
   }
   if (state === 'error') {
-    return <AccessMessage title="Gagal memuat akses" message="Terjadi masalah saat memeriksa hak akses. Periksa koneksi internet lalu coba login ulang." />;
+    const rulesProblem = errorCode?.includes('permission-denied');
+    return (
+      <AccessMessage
+        title="Gagal memuat akses"
+        message={rulesProblem
+          ? 'Database menolak akses. Biasanya karena aturan keamanan Firestore versi terbaru belum dipasang. Admin perlu memasang isi file firestore.rules (lihat README, bagian "Deploy security rules").'
+          : 'Terjadi masalah saat memeriksa hak akses. Periksa koneksi internet lalu coba login ulang.'}
+        detail={errorCode}
+      />
+    );
   }
 
   if (profile?.mustChangePassword) return <ForcePasswordChange />;

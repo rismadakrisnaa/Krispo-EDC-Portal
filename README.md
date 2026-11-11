@@ -86,6 +86,12 @@ npx firebase-tools login
 npm run deploy:rules
 ```
 
+Tanpa terminal, lewat Firebase Console:
+
+1. Buka Firebase Console > **Firestore Database**.
+2. Di pilihan database bagian atas, pilih database `ai-studio-cdae1dda-26df-4628-b8fa-2fac96309958` (bukan `(default)`).
+3. Buka tab **Rules**, hapus semua isinya, tempel seluruh isi file `firestore.rules`, lalu klik **Publish**.
+
 `firebase.json` sudah menunjuk ke database Firestore bernama yang dipakai aplikasi.
 
 ## Deploy ke Vercel

@@ -20,9 +20,11 @@ interface AuthValue {
   profile: UserProfile | null;
   role: string | null;
   can: (permission: Permission) => boolean;
+  /** Kode error teknis terakhir (untuk ditampilkan saat state = 'error'). */
+  errorCode: string | null;
 }
 
-const AuthContext = createContext<AuthValue>({ state: 'loading', user: null, profile: null, role: null, can: () => false });
+const AuthContext = createContext<AuthValue>({ state: 'loading', user: null, profile: null, role: null, can: () => false, errorCode: null });
 export const useAuth = () => useContext(AuthContext);
 
 /**
@@ -50,6 +52,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [state, setState] = useState<AuthState>('loading');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const fail = (step: string, error: unknown) => {
+    console.error(`Gagal ${step}`, error);
+    setErrorCode(`${step}: ${(error as any)?.code || (error as any)?.message || 'unknown'}`);
+    setState('error');
+  };
 
   useEffect(() => {
     let unsubProfile: (() => void) | undefined;
@@ -60,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(current);
       setProfile(null);
       setActorName('');
+      setErrorCode(null);
 
       if (!current) {
         setState('signed-out');
@@ -89,14 +98,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setProfile(data);
             setState(data.status === 'Inactive' ? 'inactive' : 'ready');
           },
-          error => {
-            console.error('Gagal memuat profil', error);
-            setState('error');
-          },
+          error => fail('memuat profil', error),
         );
       } catch (error) {
-        console.error('Gagal memeriksa akses', error);
-        setState('error');
+        fail('memeriksa akses', error);
       }
     });
 
@@ -109,7 +114,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const role = state === 'ready' ? profile?.role || null : null;
 
   return (
-    <AuthContext.Provider value={{ state, user, profile, role, can: permission => can(role, permission) }}>
+    <AuthContext.Provider value={{ state, user, profile, role, can: permission => can(role, permission), errorCode }}>
       {children}
     </AuthContext.Provider>
   );
