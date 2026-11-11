@@ -3,9 +3,10 @@ import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestor
 import { format } from 'date-fns';
 import { AlertCircle, ArrowLeftRight, ArrowRight, ClipboardList, FileCheck, History, Search, User, X } from 'lucide-react';
 import { db, describeError } from '../lib/firebase';
-import { MOVEMENT_RULES, movementLabel, movementRule, statusMeta, type MovementType } from '../lib/constants';
-import { checkEligibility, executeMovement, redownloadBA, resolveCustomer, terminationFor, withdrawalDateProblem } from '../lib/movements';
-import { cn, formatDate, formatIDR, matchesSearch } from '../lib/utils';
+import { CONDITIONS, DISPOSAL_METHODS, LOCATION_TYPE_LABEL, MOVEMENT_PHASES, MOVEMENT_RULES, movementLabel, movementRule, statusMeta, type MovementField, type MovementType } from '../lib/constants';
+import { checkEligibility, endsContract, executeMovement, fieldLabel, missingDetails, redownloadBA, resolveCustomer, terminationFor, withdrawalDateProblem, type MovementDetails } from '../lib/movements';
+import { SwapForm } from './movements/SwapForm';
+import { cn, formatDate, formatIDR, matchesSearch, movementDetailText } from '../lib/utils';
 import type { Movement, Part } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
@@ -13,6 +14,9 @@ import { useNav } from '../context/NavContext';
 import { EmptyState, Field, Modal, PageHeader, StatusBadge, btnPrimary, btnSecondary, inputClass, useFeedback } from '../components/ui';
 
 const HISTORY_PAGE = 50;
+const MOVEMENT_FIELD_TEXT = {
+  keyZeroized: 'Saya menyatakan key enkripsi, data transaksi, dan konfigurasi merchant di terminal sudah dihapus (zeroization) sebelum unit dihapuskan.',
+};
 const today = () => format(new Date(), 'yyyy-MM-dd');
 
 export function MovementPage() {
@@ -34,6 +38,8 @@ export function MovementPage() {
   const [picName, setPicName] = useState('');
   const [technicianName, setTechnicianName] = useState(profile?.displayName || profile?.username || '');
   const [damaged, setDamaged] = useState<Record<string, string[]>>({});
+  const [details, setDetails] = useState<MovementDetails>({});
+  const [unitTidMid, setUnitTidMid] = useState<Record<string, { tid: string; mid: string }>>({});
   const [showConfirm, setShowConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -51,8 +57,9 @@ export function MovementPage() {
   function changeType(next: MovementType) {
     const nextRule = movementRule(next)!;
     setType(next);
-    setToStatus(nextRule.to[0]);
+    setToStatus(nextRule.to[0] ?? '');
     setLocationId('');
+    setDetails({});
     if (nextRule.customer !== 'required') setCustomerId('');
   }
 
@@ -74,7 +81,7 @@ export function MovementPage() {
     if (!rule.locationType) return [];
     const list = locations.filter(l => l.type === rule.locationType);
     if (rule.locationType !== 'Merchant Site' || !customer) return list;
-    // Lokasi milik customer ini di atas, lokasi tanpa customer tetap bisa dipilih.
+    // Hanya merchant milik customer ini (data lama tanpa customer tetap bisa dipilih).
     return list.filter(l => !l.customerId || l.customerId === customer.id);
   }, [rule, locations, customer]);
 
@@ -83,6 +90,15 @@ export function MovementPage() {
     // Gudang / service center tunggal langsung terpilih.
     if (!locationId && rule.locationType && rule.locationType !== 'Merchant Site' && locationOptions.length === 1) setLocationId(locationOptions[0].id);
   }, [locationOptions, locationId, rule]);
+
+  useEffect(() => {
+    if (!rule.perUnitTidMid) return;
+    setUnitTidMid(prev => {
+      const next: typeof prev = {};
+      for (const a of eligible) next[a.id] = prev[a.id] ?? { tid: a.tid || '', mid: a.mid || '' };
+      return next;
+    });
+  }, [rule, eligible]);
 
   const suggestions = useMemo(() => {
     if (!search.trim()) return [];
@@ -111,15 +127,15 @@ export function MovementPage() {
   // ---------------- Ringkasan denda (Withdrawal) ----------------
   const partById = useMemo(() => new Map(parts.map(p => [p.id, p])), [parts]);
   const penaltyPreview = useMemo(() => {
-    if (type !== 'Withdrawal') return null;
+    if (!rule.terminatesContract) return null;
     const txDate = new Date(transactionDate);
     const rows = eligible.map(asset => {
-      const termination = isNaN(txDate.getTime()) ? null : terminationFor(asset, customer, txDate);
+      const termination = isNaN(txDate.getTime()) || !endsContract(rule, asset) ? null : terminationFor(asset, customer, txDate);
       const partPenalty = (damaged[asset.id] || []).reduce((sum, id) => sum + (Number(partById.get(id)?.price) || 0), 0);
       return { asset, termination, partPenalty };
     });
     return { rows, total: rows.reduce((sum, r) => sum + (r.termination?.penaltyAmount || 0) + r.partPenalty, 0) };
-  }, [type, eligible, transactionDate, damaged, partById, customer]);
+  }, [rule, eligible, transactionDate, damaged, partById, customer]);
 
   const togglePart = (assetId: string, partId: string) =>
     setDamaged(prev => {
@@ -134,8 +150,11 @@ export function MovementPage() {
   if (rule.customer === 'required' && !formCustomer) problems.push('Pilih customer.');
   if (!transactionDate) problems.push('Isi tanggal transaksi.');
   else if (transactionDate > today()) problems.push('Tanggal transaksi tidak boleh di masa depan.');
-  const dateProblem = type === 'Withdrawal' && transactionDate ? withdrawalDateProblem(eligible, transactionDate) : null;
+  const dateProblem = rule.terminatesContract && transactionDate ? withdrawalDateProblem(eligible.filter(a => endsContract(rule, a)), transactionDate) : null;
   if (dateProblem) problems.push(dateProblem);
+  if (rule.locationRequired && !locationId) problems.push(`Pilih ${LOCATION_TYPE_LABEL[rule.locationType || ''] || 'lokasi'} tujuan.`);
+  const missing = missingDetails(rule, details);
+  if (missing.length) problems.push(`Wajib diisi: ${missing.join(', ')}.`);
   if (type === 'Install' && formCustomer && !(Number(formCustomer.value) > 0)) {
     problems.push(`Nilai sewa customer "${formCustomer.name}" masih Rp 0. Isi dulu di Master Customer supaya kontrak & denda terhitung benar.`);
   }
@@ -144,6 +163,8 @@ export function MovementPage() {
     setAssetIds([]);
     setNotes('');
     setDamaged({});
+    setDetails({});
+    setUnitTidMid({});
     setPicName('');
     setLocationId('');
     setTransactionDate(today());
@@ -157,7 +178,7 @@ export function MovementPage() {
         {
           type, toStatus, assets: eligible, customer: formCustomer,
           location: locations.find(l => l.id === locationId) || null,
-          transactionDate, notes, picName, technicianName,
+          transactionDate, notes, picName, technicianName, details, unitTidMid,
           damagedParts: Object.fromEntries((Object.entries(damaged) as [string, string[]][]).map(([id, ids]) => [id, ids.map(p => partById.get(p)).filter(Boolean) as Part[]])),
         },
         { childrenOf, customerById },
@@ -189,7 +210,7 @@ export function MovementPage() {
 
   const filteredHistory = movements.filter(m => {
     const sn = m.sn || assetById.get(m.edcId)?.sn;
-    return (historyType === 'All' || m.type === historyType) && matchesSearch(historySearch, sn, m.customerName, m.userName, m.baNumber, m.notes);
+    return (historyType === 'All' || m.type === historyType) && matchesSearch(historySearch, sn, m.customerName, m.userName, m.baNumber, m.notes, m.referenceNo, m.poNumber, m.supplierName, m.swapWithSn);
   });
   const historyTypes = Array.from(new Set<string>(movements.map(m => m.type))).sort();
 
@@ -216,17 +237,27 @@ export function MovementPage() {
               Role Anda hanya bisa melihat riwayat pergerakan.
             </div>
           ) : (
-            <form
-              onSubmit={e => { e.preventDefault(); if (problems.length === 0) setShowConfirm(true); }}
-              className="bg-white p-6 rounded-xl border border-brand-border shadow-sm space-y-5"
-            >
+            <div className="bg-white p-6 rounded-xl border border-brand-border shadow-sm space-y-5">
               <div className="font-bold text-xs text-brand-text-muted uppercase tracking-widest border-b border-brand-border pb-3">Transaksi Baru</div>
 
               <Field label="1. Jenis Pergerakan" hint={rule.description}>
                 <select className={inputClass} value={type} onChange={e => changeType(e.target.value as MovementType)}>
-                  {MOVEMENT_RULES.map(r => <option key={r.type} value={r.type}>{r.label}</option>)}
+                  {MOVEMENT_PHASES.map(phase => (
+                    <optgroup key={phase} label={phase}>
+                      {MOVEMENT_RULES.filter(r => r.phase === phase).map(r => <option key={r.type} value={r.type}>{r.label}</option>)}
+                    </optgroup>
+                  ))}
                 </select>
               </Field>
+
+              {type === 'Swap' ? <SwapForm /> : (
+            <form
+              onSubmit={e => { e.preventDefault(); if (problems.length === 0) setShowConfirm(true); }}
+              className="space-y-5"
+            >
+              {rule.keepStatus && (
+                <p className="text-[11px] text-brand-text-muted -mt-2">Status unit tidak berubah; transaksi tetap tercatat di riwayat.</p>
+              )}
 
               {rule.to.length > 1 && (
                 <Field label="Status Akhir">
@@ -311,12 +342,14 @@ export function MovementPage() {
 
               {rule.locationType && (
                 <Field
-                  label={`Lokasi Tujuan (${rule.locationType})`}
-                  hint={locationOptions.length === 0 ? `Belum ada lokasi bertipe ${rule.locationType} di Master Lokasi. Boleh dikosongkan.` : undefined}
+                  label={`${rule.locationType === 'Merchant Site' ? 'Merchant' : LOCATION_TYPE_LABEL[rule.locationType]} Tujuan${rule.locationRequired ? '' : ' (opsional)'}`}
+                  hint={locationOptions.length === 0
+                    ? `Belum ada ${LOCATION_TYPE_LABEL[rule.locationType].toLowerCase()}${rule.locationType === 'Merchant Site' && customer ? ` untuk ${customer.name}` : ''} di menu Merchant & Lokasi.`
+                    : undefined}
                 >
-                  <select className={inputClass} value={locationId} onChange={e => setLocationId(e.target.value)}>
-                    <option value="">{rule.locationType === 'Merchant Site' ? 'Alamat utama customer' : 'Tidak ditentukan'}</option>
-                    {locationOptions.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  <select className={inputClass} value={locationId} onChange={e => setLocationId(e.target.value)} required={rule.locationRequired}>
+                    <option value="">{rule.locationType === 'Merchant Site' ? 'Pilih merchant / outlet...' : 'Tidak ditentukan'}</option>
+                    {locationOptions.map(l => <option key={l.id} value={l.id}>{l.name}{l.city ? ` · ${l.city}` : ''}</option>)}
                   </select>
                 </Field>
               )}
@@ -325,10 +358,62 @@ export function MovementPage() {
                 <input type="date" required max={today()} className={inputClass} value={transactionDate} onChange={e => setTransactionDate(e.target.value)} />
               </Field>
 
-              {type === 'Withdrawal' && penaltyPreview && eligible.length > 0 && (
+              {(rule.fields || []).length > 0 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {(rule.fields || []).map((field: MovementField) => {
+                    const label = fieldLabel(rule.type, field) + ((rule.required || []).includes(field) ? '' : ' (opsional)');
+                    const setField = (value: unknown) => setDetails(prev => ({ ...prev, [field]: value }));
+                    if (field === 'keyZeroized') {
+                      return (
+                        <label key={field} className="col-span-2 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800 font-medium cursor-pointer">
+                          <input type="checkbox" className="mt-0.5" checked={details.keyZeroized === true} onChange={e => setField(e.target.checked)} />
+                          <span>{MOVEMENT_FIELD_TEXT.keyZeroized}</span>
+                        </label>
+                      );
+                    }
+                    if (field === 'conditionAfter' || field === 'disposalMethod') {
+                      const options = field === 'conditionAfter' ? CONDITIONS : DISPOSAL_METHODS;
+                      return (
+                        <React.Fragment key={field}><Field label={label}>
+                          <select className={inputClass} value={(details[field] as string) || ''} onChange={e => setField(e.target.value)}>
+                            <option value="">{field === 'conditionAfter' ? 'Tidak berubah' : 'Pilih...'}</option>
+                            {options.map(o => <option key={o}>{o}</option>)}
+                          </select>
+                        </Field></React.Fragment>
+                      );
+                    }
+                    const numeric = field === 'cost' || field === 'disposalValue';
+                    return (
+                      <React.Fragment key={field}><Field label={label}>
+                        <input
+                          type={numeric ? 'number' : 'text'} min={numeric ? 0 : undefined} maxLength={numeric ? undefined : 200} className={inputClass}
+                          value={(details[field] as string | number | undefined) ?? ''} onChange={e => setField(numeric && e.target.value !== '' ? Number(e.target.value) : e.target.value)}
+                        />
+                      </Field></React.Fragment>
+                    );
+                  })}
+                </div>
+              )}
+
+              {rule.perUnitTidMid && eligible.length > 0 && (
                 <div className="space-y-2">
-                  <span className="block text-[10px] font-bold text-brand-text-muted uppercase tracking-widest px-1">Checklist Part Hilang / Rusak per Unit</span>
-                  {parts.length === 0 && <p className="text-[11px] text-brand-text-muted italic">Master Part masih kosong, denda part tidak dihitung.</p>}
+                  <span className="block text-[10px] font-bold text-brand-text-muted uppercase tracking-widest px-1">TID / MID per Unit</span>
+                  <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-1">
+                    {eligible.map(a => (
+                      <div key={a.id} className="grid grid-cols-[1fr_1fr_1fr] gap-2 items-center">
+                        <span className="text-xs font-bold text-brand-text-main truncate">{a.sn}</span>
+                        <input aria-label={`TID ${a.sn}`} placeholder="TID" maxLength={64} className={cn(inputClass, 'py-1.5 text-xs')} value={unitTidMid[a.id]?.tid ?? ''} onChange={e => setUnitTidMid(prev => ({ ...prev, [a.id]: { ...(prev[a.id] || { tid: '', mid: '' }), tid: e.target.value } }))} />
+                        <input aria-label={`MID ${a.sn}`} placeholder="MID" maxLength={64} className={cn(inputClass, 'py-1.5 text-xs')} value={unitTidMid[a.id]?.mid ?? ''} onChange={e => setUnitTidMid(prev => ({ ...prev, [a.id]: { ...(prev[a.id] || { tid: '', mid: '' }), mid: e.target.value } }))} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {rule.terminatesContract && penaltyPreview && eligible.length > 0 && (
+                <div className="space-y-2">
+                  <span className="block text-[10px] font-bold text-brand-text-muted uppercase tracking-widest px-1">{type === 'Withdrawal' ? 'Checklist Part Hilang / Rusak per Unit' : 'Pengakhiran Kontrak'}</span>
+                  {type === 'Withdrawal' && parts.length === 0 && <p className="text-[11px] text-brand-text-muted italic">Master Part masih kosong, denda part tidak dihitung.</p>}
                   <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
                     {penaltyPreview.rows.map(({ asset, termination, partPenalty }) => (
                       <div key={asset.id} className="p-3 border border-brand-border rounded-lg space-y-2">
@@ -338,7 +423,7 @@ export function MovementPage() {
                             {!termination ? 'Tanpa kontrak aktif' : termination.penaltyAmount ? `Early: ${termination.remainingMonthsAtTermination} bln = ${formatIDR(termination.penaltyAmount)}` : 'Kontrak selesai normal'}
                           </span>
                         </div>
-                        <div className="flex flex-wrap gap-1.5">
+                        {type === 'Withdrawal' && <div className="flex flex-wrap gap-1.5">
                           {parts.map(p => {
                             const on = (damaged[asset.id] || []).includes(p.id);
                             return (
@@ -350,7 +435,7 @@ export function MovementPage() {
                               </button>
                             );
                           })}
-                        </div>
+                        </div>}
                         {partPenalty > 0 && <p className="text-[10px] font-bold text-orange-700">Denda part: {formatIDR(partPenalty)}</p>}
                       </div>
                     ))}
@@ -377,6 +462,8 @@ export function MovementPage() {
                 <ArrowRight size={16} />
               </button>
             </form>
+              )}
+            </div>
           )}
         </div>
 
@@ -417,6 +504,7 @@ export function MovementPage() {
                   {((move.penaltyAmount || 0) + (move.partPenaltyAmount || 0)) > 0 && (
                     <p className="text-[11px] font-bold text-red-600">Denda: {formatIDR((move.penaltyAmount || 0) + (move.partPenaltyAmount || 0))}</p>
                   )}
+                  {movementDetailText(move) && <p className="text-[11px] text-brand-text-main font-medium">{movementDetailText(move)}</p>}
                   {move.notes && <p className="text-[11px] text-brand-text-muted italic">"{move.notes}"</p>}
                   <div className="flex items-center justify-between gap-2 pt-0.5">
                     <span className="flex items-center gap-1.5 text-[10px] font-bold text-brand-text-muted uppercase tracking-wide"><User size={10} />{move.userName || 'System'}</span>

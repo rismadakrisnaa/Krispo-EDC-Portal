@@ -86,8 +86,8 @@ service cloud.firestore {
 
     function isValidStatus(status) {
       return status in [
-        'Incoming Stock', 'Available in Warehouse', 'Reserved / Allocated', 'In Delivery',
-        'Installed / Active', 'Withdrawn', 'Under Repair', 'Damaged', 'Lost', 'Retired'
+        'Incoming Stock', 'Available in Warehouse', 'Staged / Ready', 'Reserved / Allocated', 'In Delivery',
+        'Installed / Active', 'Withdrawn', 'Under Repair', 'Damaged', 'Lost', 'Returned to Supplier', 'Retired'
       ];
     }
 
@@ -99,7 +99,9 @@ service cloud.firestore {
              optString(data, 'tid', 64) && optString(data, 'mid', 64) &&
              optString(data, 'customerName', 200) && optString(data, 'locationName', 200) &&
              optAmount(data, 'penaltyAmount') && optAmount(data, 'partPenaltyAmount') &&
-             optAmount(data, 'currentMonthlyRental');
+             optAmount(data, 'currentMonthlyRental') && optAmount(data, 'purchasePrice') &&
+             optAmount(data, 'disposalValue') && optString(data, 'assetTag', 64) && optString(data, 'poNumber', 64) &&
+             optString(data, 'supplierName', 200);
     }
 
     function isValidCustomer(data) {
@@ -109,10 +111,29 @@ service cloud.firestore {
              optString(data, 'address', 500) && optString(data, 'picName', 200);
     }
 
+    function optCoordinate(data, field, limit) {
+      return !(field in data) || data[field] == null ||
+             (data[field] is number && data[field] >= -limit && data[field] <= limit);
+    }
+
     function isValidLocation(data) {
       return data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
              data.type in ['Warehouse', 'Merchant Site', 'Service Center'] &&
-             optString(data, 'address', 500);
+             optString(data, 'address', 500) && optString(data, 'city', 100) && optString(data, 'province', 100) &&
+             optString(data, 'region', 100) && optString(data, 'picName', 200) && optString(data, 'picPhone', 64) &&
+             optCoordinate(data, 'latitude', 90) && optCoordinate(data, 'longitude', 180);
+    }
+
+    function isValidSupplier(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 200 &&
+             optString(data, 'email', 128) && optString(data, 'phone', 64) && optString(data, 'address', 500) &&
+             optString(data, 'notes', 500);
+    }
+
+    function isValidModel(data) {
+      return data.brand is string && data.brand.size() > 0 && data.brand.size() <= 100 &&
+             data.model is string && data.model.size() > 0 && data.model.size() <= 100 &&
+             optAmount(data, 'warrantyMonths') && optString(data, 'notes', 500);
     }
 
     function isValidPart(data) {
@@ -127,7 +148,8 @@ service cloud.firestore {
              data.userId == request.auth.uid &&
              data.timestamp == request.time &&
              optString(data, 'notes', 2000) &&
-             optAmount(data, 'penaltyAmount') && optAmount(data, 'partPenaltyAmount');
+             optAmount(data, 'penaltyAmount') && optAmount(data, 'partPenaltyAmount') &&
+             optAmount(data, 'cost') && optAmount(data, 'disposalValue') && optString(data, 'referenceNo', 200);
     }
 
     // ---------------- Users ----------------
@@ -196,6 +218,19 @@ service cloud.firestore {
     match /locations/{locationId} {
       allow read: if canRead();
       allow create, update: if hasRole(['Operations', 'Warehouse']) && isValidLocation(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // Supplier / vendor EDC dan master brand & tipe perangkat.
+    match /suppliers/{supplierId} {
+      allow read: if canRead();
+      allow create, update: if hasRole(['Operations', 'Warehouse']) && isValidSupplier(incoming());
+      allow delete: if isAdmin();
+    }
+
+    match /device_models/{modelId} {
+      allow read: if canRead();
+      allow create, update: if hasRole(['Operations', 'Warehouse']) && isValidModel(incoming());
       allow delete: if isAdmin();
     }
 

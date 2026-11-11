@@ -213,6 +213,40 @@ describe('master data', () => {
   });
 });
 
+describe('pengadaan & lifecycle', () => {
+  it('supplier & model: role gudang/operasional boleh, lainnya tidak; data divalidasi', async () => {
+    await assertSucceeds(setDoc(doc(asUser('wh', 'wh@x.co'), 'suppliers/s1'), { name: 'PT Distributor EDC', phone: '021' }));
+    await assertSucceeds(setDoc(doc(asUser('ops', 'ops@x.co'), 'device_models/m1'), { brand: 'PAX', model: 'A920', warrantyMonths: 12 }));
+    await assertFails(setDoc(doc(asUser('svc', 'svc@x.co'), 'suppliers/s2'), { name: 'X' }));
+    await assertFails(setDoc(doc(asUser('mgmt', 'mgmt@krispo-edc.local'), 'device_models/m2'), { brand: 'PAX', model: 'A50' }));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'suppliers/s3'), { name: '' }));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'device_models/m3'), { brand: 'PAX', model: 'A50', warrantyMonths: -1 }));
+    await assertFails(deleteDoc(doc(asUser('ops', 'ops@x.co'), 'suppliers/s1')));
+    await assertSucceeds(getDocs(collection(asUser('mgmt', 'mgmt@krispo-edc.local'), 'suppliers')));
+  });
+
+  it('status baru (siap pasang, diretur ke supplier) & data pengadaan diterima', async () => {
+    const db = asUser('ops', 'ops@x.co');
+    await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Staged / Ready', tid: 'T1' }));
+    await assertSucceeds(updateDoc(doc(db, 'edcs/e1'), { status: 'Returned to Supplier', purchasePrice: 2500000, poNumber: 'PO-1' }));
+    await assertFails(updateDoc(doc(db, 'edcs/e1'), { purchasePrice: -1 }));
+  });
+
+  it('merchant: koordinat divalidasi', async () => {
+    const db = asUser('wh', 'wh@x.co');
+    const merchant = { name: 'Toko A', type: 'Merchant Site', customerId: 'c1', address: 'Jl. A', city: 'Jakarta', latitude: -6.2, longitude: 106.8 };
+    await assertSucceeds(setDoc(doc(db, 'locations/m1'), merchant));
+    await assertSucceeds(setDoc(doc(db, 'locations/m2'), { ...merchant, latitude: null, longitude: null }));
+    await assertFails(setDoc(doc(db, 'locations/m3'), { ...merchant, latitude: 200 }));
+    await assertFails(setDoc(doc(db, 'locations/m4'), { ...merchant, longitude: '106' }));
+  });
+
+  it('log pergerakan: biaya tidak boleh negatif', async () => {
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'movements/x'), movement('ops', { cost: -5 })));
+    await assertSucceeds(setDoc(doc(asUser('ops', 'ops@x.co'), 'movements/y'), movement('ops', { cost: 150000, referenceNo: 'TKT-1' })));
+  });
+});
+
 describe('log pergerakan', () => {
   it('hanya role operasional, atas nama sendiri, dengan waktu server', async () => {
     await assertSucceeds(setDoc(doc(asUser('ops', 'ops@x.co'), 'movements/a'), movement('ops')));

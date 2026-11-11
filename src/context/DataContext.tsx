@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import type { Asset, Customer, Location, Part } from '../lib/types';
+import type { Asset, Customer, DeviceModel, Location, Part, Supplier } from '../lib/types';
 
 /**
  * Satu sumber data untuk semua halaman.
@@ -15,10 +15,13 @@ interface DataValue {
   customers: Customer[];
   locations: Location[];
   parts: Part[];
+  suppliers: Supplier[];
+  models: DeviceModel[];
   loading: boolean;
   error: string | null;
   assetById: Map<string, Asset>;
   customerById: Map<string, Customer>;
+  locationById: Map<string, Location>;
   /** SIM / peripheral yang tertaut ke sebuah perangkat. */
   childrenOf: (deviceId: string) => Asset[];
 }
@@ -38,7 +41,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [parts, setParts] = useState<Part[]>([]);
-  const [loaded, setLoaded] = useState({ assets: false, customers: false, locations: false, parts: false });
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [models, setModels] = useState<DeviceModel[]>([]);
+  const [loaded, setLoaded] = useState({ assets: false, customers: false, locations: false, parts: false, suppliers: false, models: false });
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -72,6 +77,17 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
         setParts(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Part).sort(byName));
         markLoaded('parts');
       }, onError('parts')),
+      onSnapshot(collection(db, 'suppliers'), snap => {
+        setSuppliers(snap.docs.map(d => ({ ...d.data(), id: d.id }) as Supplier).sort(byName));
+        markLoaded('suppliers');
+      }, onError('suppliers')),
+      onSnapshot(collection(db, 'device_models'), snap => {
+        setModels(
+          snap.docs.map(d => ({ ...d.data(), id: d.id }) as DeviceModel)
+            .sort((a, b) => `${a.brand} ${a.model}`.localeCompare(`${b.brand} ${b.model}`)),
+        );
+        markLoaded('models');
+      }, onError('models')),
     ];
     return () => unsubs.forEach(unsub => unsub());
   }, []);
@@ -102,13 +118,16 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       customers,
       locations,
       parts,
-      loading: !(loaded.assets && loaded.customers && loaded.locations && loaded.parts),
+      suppliers,
+      models,
+      loading: !Object.values(loaded).every(Boolean),
       error,
       assetById,
       customerById,
+      locationById,
       childrenOf: deviceId => childMap.get(deviceId) || [],
     };
-  }, [rawAssets, customers, locations, parts, loaded, error]);
+  }, [rawAssets, customers, locations, parts, suppliers, models, loaded, error]);
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }

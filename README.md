@@ -9,11 +9,11 @@ Stack: React 19, Vite, Tailwind CSS 4, Firebase Auth (username + password) dan C
 
 | Menu | Fungsi |
 | --- | --- |
-| Dashboard | Ringkasan stok per status, hal yang perlu perhatian, pergerakan terbaru. Semua kartu bisa diklik. |
-| Aset & Monitoring | Master perangkat / SIM / peripheral, posisi unit, filter, import & export Excel, detail + riwayat. |
-| Pergerakan EDC | Satu-satunya tempat status unit berubah: alokasi, kirim, pasang, relokasi, tarik, perbaikan, kembali ke stok, write-off. |
+| Dashboard | Ringkasan armada aktif per status, hal yang perlu perhatian (QC tertunda, stok menganggur, garansi habis, kontrak berakhir, denda), pergerakan terbaru. Semua kartu bisa diklik. |
+| Aset & Monitoring | Master perangkat / SIM / peripheral, penerimaan dari supplier (manual & import Excel), posisi unit (merchant, kota, region), lama di status, garansi, filter, export, detail + timeline siklus hidup. |
+| Pergerakan EDC | Satu-satunya tempat status unit berubah, dari penerimaan sampai penghapusan (lihat alur di bawah). Berita Acara PDF otomatis. |
 | Monitoring Kontrak | Kontrak per unit, ARO, kontrak yang segera berakhir, denda, pembatalan pengakhiran. |
-| Master Data | Customer B2B, Lokasi, Part EDC. |
+| Master Data | Customer B2B, Merchant & Lokasi (outlet milik customer, gudang, service center), Supplier & Model perangkat, Part EDC. |
 | User & Role | Khusus Admin: buat akun user, atur role, nonaktifkan akun. |
 
 ## Akses & role
@@ -75,7 +75,8 @@ Di mode emulator, buat admin lewat tombol **Setup admin pertama** di halaman log
 
 ## Deploy security rules (wajib setelah menarik perubahan ini)
 
-Aturan akses ada di `firestore.rules`. Aplikasi versi ini **membutuhkan** rules versi ini (misalnya aturan pembuatan akun oleh Admin).
+Aturan akses ada di `firestore.rules`. Setiap kali file ini berubah, pasang ulang rules-nya; aplikasi versi baru membutuhkan rules versi yang sama
+(misalnya koleksi `suppliers`, `device_models`, dan status baru).
 Deploy rules lebih dulu, baru deploy aplikasinya.
 
 ```bash
@@ -150,19 +151,29 @@ Aturan penting saat mengembangkan:
 2. Status dan role selalu diambil dari `src/lib/constants.ts`, jangan menulis string status langsung di halaman.
 3. Halaman membaca data dari `useData()`, jangan membuka listener koleksi sendiri.
 
-## Alur status aset
+## Alur status aset (hulu ke hilir)
 
-```
-Stok Masuk ──Kembali ke Stok──▶ Tersedia ──Alokasi──▶ Dialokasikan ──Kirim──▶ Dalam Pengiriman
-                                   │  ▲                     │                        │
-                                   │  └──────── Kembali ke Stok ◀────────────────────┤
-                                   └───────────────── Pasang ──────────────────────▶ Terpasang ⟲ Relokasi
-                                                                                      │
-Tersedia ◀──Kembali ke Stok── Ditarik (Gudang) ◀──────────── Tarik ──────────────────┘
-Tersedia / Ditarik ──Kirim Perbaikan──▶ Perbaikan ──Kembali ke Stok──▶ Tersedia
-(selain Terpasang) ──Write-off──▶ Rusak / Hilang / Dihapuskan
-```
+| Tahap | Pergerakan | Dari → Ke | BA |
+| --- | --- | --- | --- |
+| Pengadaan | Penerimaan dari supplier (registrasi / import) | baru → Stok Masuk (QC) atau Tersedia | |
+| | Lolos QC | Stok Masuk → Tersedia | |
+| | Retur ke Supplier (RMA) | stok / rusak / perbaikan → Diretur ke Supplier | ya |
+| Persiapan | Staging / konfigurasi (TID/MID per unit) | Tersedia / Ditarik → Siap Pasang | |
+| | Mutasi antar gudang | status tetap, pindah gudang | ya |
+| Distribusi | Alokasi | stok → Dialokasikan | |
+| | Kirim ke merchant | stok / dialokasikan → Dalam Pengiriman | ya |
+| | Pasang (Install), kontrak mulai | → Terpasang | ya |
+| Operasional | Relokasi ke merchant lain (customer sama) | Terpasang → Terpasang | ya |
+| | Kunjungan / maintenance | status tetap | ya |
+| | Tukar unit (swap): kontrak, merchant, TID/MID pindah ke unit pengganti tanpa denda | Terpasang ↔ stok | ya |
+| Service | Kirim perbaikan (no. tiket, vendor, biaya) | stok / rusak → Perbaikan | |
+| | Kembali ke stok / refurbish (kondisi baru, biaya) | → Tersedia | |
+| Akhir masa pakai | Tarik (kontrak diakhiri, denda otomatis) | Terpasang → Ditarik | ya |
+| | Tandai rusak | → Rusak | |
+| | Hilang / dicuri (kontrak diakhiri jika terpasang) | → Hilang | ya |
+| | Penghapusan / disposal (wajib pernyataan hapus key) | stok / rusak → Dihapuskan | ya |
 
+Status akhir (Hilang, Diretur ke Supplier, Dihapuskan) tidak bisa digerakkan lagi dan disembunyikan dari daftar aset secara default.
 SIM dan peripheral yang tertaut ke perangkat selalu ikut status, customer, dan lokasi perangkat induknya.
 
 ## Catatan yang perlu diketahui

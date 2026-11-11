@@ -1,9 +1,10 @@
 import { collection, deleteField, doc, serverTimestamp, writeBatch, type WriteBatch } from 'firebase/firestore';
+import { addMonths, format } from 'date-fns';
 import { actorName, auth, db } from './firebase';
-import { ALL_STATUSES, CONDITIONS, CUSTOMER_STATUSES, INITIAL_STATUSES, PERIPHERAL_TYPES, SIM_TYPES, STATUS, statusMeta, type AssetStatus, type AssetType } from './constants';
+import { ALL_STATUSES, CONDITIONS, CONNECTION_TYPES, CUSTOMER_STATUSES, INITIAL_STATUSES, PERIPHERAL_TYPES, SIM_TYPES, STATUS, statusMeta, type AssetStatus, type AssetType } from './constants';
 import { cell, type Row } from './excel';
-import { chunk, stripUndefined } from './utils';
-import type { Asset } from './types';
+import { chunk, stripUndefined, toNumber } from './utils';
+import type { Asset, DeviceModel, Supplier } from './types';
 
 /**
  * Operasi data aset (registrasi, edit, tautan SIM/peripheral, hapus, import).
@@ -31,12 +32,45 @@ export interface AssetInput {
   /** Perangkat: SN charger & battery yang tertaut. */
   chargerSN: string;
   batterySN: string;
+  // Identitas tambahan
+  assetTag: string;
+  connectionType: string;
+  modelId: string;
+  // Pengadaan / penerimaan dari supplier
+  supplierId: string;
+  poNumber: string;
+  deliveryNoteNo: string;
+  receivedDate: string; // yyyy-MM-dd
+  purchasePrice: string;
+  warrantyUntil: string; // yyyy-MM-dd
 }
 
+/** Data penerimaan barang (GR) yang berlaku untuk semua unit dalam satu kiriman. */
+export type ReceiptInput = Pick<AssetInput, 'supplierId' | 'poNumber' | 'deliveryNoteNo' | 'receivedDate' | 'purchasePrice' | 'warrantyUntil'>;
+
+export const todayISO = () => format(new Date(), 'yyyy-MM-dd');
+
+export const emptyReceipt = (): ReceiptInput => ({
+  supplierId: '', poNumber: '', deliveryNoteNo: '', receivedDate: todayISO(), purchasePrice: '', warrantyUntil: '',
+});
+
+/** Garansi otomatis dari master model: tanggal terima + masa garansi model. */
+export function defaultWarranty(receivedDate: string, model?: DeviceModel) {
+  const months = Number(model?.warrantyMonths);
+  const start = new Date(receivedDate);
+  if (!months || isNaN(start.getTime())) return '';
+  return format(addMonths(start, months), 'yyyy-MM-dd');
+}
+
+export const findModel = (models: DeviceModel[], vendor: string, model: string) =>
+  models.find(m => m.brand.trim().toLowerCase() === vendor.trim().toLowerCase() && m.model.trim().toLowerCase() === model.trim().toLowerCase());
+
 export const emptyAssetInput = (assetType: AssetType): AssetInput => ({
-  assetType, sn: '', status: STATUS.AVAILABLE, vendor: '', model: '', tid: '', mid: '', osVersion: '',
+  assetType, sn: '', vendor: '', model: '', tid: '', mid: '', osVersion: '',
   condition: 'New', imei: '', provider: '', msisdn: '', simType: 'Public', peripheralType: '',
   linkTargetSN: '', chargerSN: '', batterySN: '',
+  assetTag: '', connectionType: '', modelId: '', ...emptyReceipt(),
+  status: STATUS.INCOMING,
 });
 
 const norm = (sn: string) => sn.trim().toLowerCase();
@@ -59,6 +93,32 @@ function describeFields(input: AssetInput) {
   return {
     vendor: t(input.vendor), model: t(input.model), tid: t(input.tid), mid: t(input.mid),
     osVersion: t(input.osVersion), condition: input.condition || 'New', imei: t(input.imei),
+  };
+}
+
+const isoDate = (value: string) => {
+  if (!value) return undefined;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? undefined : d.toISOString();
+};
+
+/** Field pengadaan & identitas tambahan. Berlaku untuk semua tipe aset. */
+function procurementFields(input: AssetInput, suppliers: Supplier[], models: DeviceModel[]) {
+  const supplier = suppliers.find(s => s.id === input.supplierId);
+  const model = input.assetType === 'perangkat' ? findModel(models, input.vendor, input.model) : undefined;
+  if (input.receivedDate && input.receivedDate > todayISO()) throw new Error('Tanggal terima tidak boleh di masa depan.');
+  if (input.purchasePrice && !(Number(input.purchasePrice) >= 0)) throw new Error('Harga beli harus angka positif.');
+  return {
+    assetTag: input.assetTag.trim(),
+    connectionType: input.assetType === 'perangkat' ? input.connectionType : undefined,
+    modelId: model?.id ?? null,
+    supplierId: supplier?.id ?? null,
+    supplierName: supplier?.name ?? null,
+    poNumber: input.poNumber.trim(),
+    deliveryNoteNo: input.deliveryNoteNo.trim(),
+    receivedDate: isoDate(input.receivedDate),
+    purchasePrice: input.purchasePrice === '' ? undefined : toNumber(input.purchasePrice),
+    warrantyUntil: isoDate(input.warrantyUntil || defaultWarranty(input.receivedDate, model)),
   };
 }
 
@@ -86,13 +146,17 @@ const detachFields = () => ({
 
 const stamp = (uid: string) => ({ updatedAt: serverTimestamp(), lastUpdatedBy: uid });
 
-function logInitial(batch: WriteBatch, assetId: string, sn: string, status: string, type: string) {
+/** Log penerimaan barang (GR): awal dari riwayat setiap unit. */
+function logReceipt(batch: WriteBatch, assetId: string, sn: string, data: Record<string, unknown>, source: 'manual' | 'import') {
   const user = requireUser();
-  batch.set(doc(collection(db, 'movements')), {
-    edcId: assetId, sn, type, toStatus: status, baGenerated: false,
-    transactionDate: new Date().toISOString().slice(0, 10),
+  batch.set(doc(collection(db, 'movements')), stripUndefined({
+    edcId: assetId, sn, type: 'Goods Receipt', toStatus: data.status, baGenerated: false,
+    transactionDate: String(data.receivedDate || new Date().toISOString()).slice(0, 10),
+    supplierName: data.supplierName || undefined, poNumber: data.poNumber || undefined, referenceNo: data.deliveryNoteNo || undefined,
+    cost: typeof data.purchasePrice === 'number' ? data.purchasePrice : undefined,
+    notes: source === 'import' ? 'Registrasi lewat import Excel.' : '',
     timestamp: serverTimestamp(), userId: user.uid, userName: actorName(),
-  });
+  }));
 }
 
 function findDevice(assets: Asset[], sn: string) {
@@ -111,7 +175,7 @@ function planPeripheral(assets: Asset[], sn: string, peripheralType: string, dev
   return { action: 'link' as const, existing };
 }
 
-export async function createAsset(input: AssetInput, assets: Asset[]) {
+export async function createAsset(input: AssetInput, assets: Asset[], suppliers: Supplier[] = [], models: DeviceModel[] = []) {
   const user = requireUser();
   const sn = input.sn.trim();
   if (!sn) throw new Error('Serial number wajib diisi.');
@@ -121,8 +185,8 @@ export async function createAsset(input: AssetInput, assets: Asset[]) {
   const batch = writeBatch(db);
   const ref = doc(collection(db, 'edcs'));
   let data: Record<string, unknown> = {
-    sn, assetType: input.assetType, status: input.status, ...describeFields(input),
-    createdAt: serverTimestamp(), ...stamp(user.uid),
+    sn, assetType: input.assetType, status: input.status, ...describeFields(input), ...procurementFields(input, suppliers, models),
+    statusSince: new Date().toISOString(), createdAt: serverTimestamp(), ...stamp(user.uid),
   };
 
   if (input.assetType !== 'perangkat' && input.linkTargetSN.trim()) {
@@ -130,8 +194,9 @@ export async function createAsset(input: AssetInput, assets: Asset[]) {
     if (!device) throw new Error(`Perangkat dengan SN ${input.linkTargetSN.trim()} tidak ditemukan.`);
     data = { ...data, ...inheritFrom(device) };
   }
+  data = stripUndefined(data);
   batch.set(ref, data);
-  logInitial(batch, ref.id, sn, String(data.status), 'Initial stock');
+  logReceipt(batch, ref.id, sn, data, 'manual');
 
   if (input.assetType === 'perangkat') {
     const self = { id: ref.id, sn, status: input.status };
@@ -154,13 +219,13 @@ export async function createAsset(input: AssetInput, assets: Asset[]) {
   await batch.commit();
 }
 
-export async function updateAsset(asset: Asset, input: AssetInput, assets: Asset[]) {
+export async function updateAsset(asset: Asset, input: AssetInput, assets: Asset[], suppliers: Supplier[] = [], models: DeviceModel[] = []) {
   const user = requireUser();
   if (!ALL_STATUSES.includes(asset.status as AssetStatus)) {
     throw new Error(`Status "${asset.status || 'kosong'}" berasal dari data lama dan tidak dikenal. Proses unit ini lewat Pergerakan > "Kembali ke Stok" dulu, baru edit datanya.`);
   }
   const batch = writeBatch(db);
-  const update: Record<string, unknown> = { ...describeFields(input), ...stamp(user.uid) };
+  const update: Record<string, unknown> = { ...describeFields(input), ...procurementFields(input, suppliers, models), ...stamp(user.uid) };
 
   if (asset.assetType !== 'perangkat') {
     const target = input.linkTargetSN.trim();
@@ -192,7 +257,8 @@ export async function updateAsset(asset: Asset, input: AssetInput, assets: Asset
     }
   }
 
-  batch.update(doc(db, 'edcs', asset.id), update);
+  // Field kosong di form edit tidak menghapus data lama yang tidak ada di form.
+  batch.update(doc(db, 'edcs', asset.id), stripUndefined(update));
   await batch.commit();
 }
 
@@ -244,21 +310,44 @@ export async function deleteAssets(targets: Asset[], assets: Asset[]) {
 // ---------------------------------------------------------------------------
 // Import Excel
 // ---------------------------------------------------------------------------
+const PROCUREMENT_COLUMNS = { 'Asset Tag': '', 'No. PO': '', 'No. Surat Jalan': '', 'Tanggal Terima': '', 'Harga Beli': '', 'Garansi Sampai': '' };
+
 export const IMPORT_TEMPLATES: Record<AssetType, Row[]> = {
   perangkat: [{
-    'Serial Number': 'SN-DEVICE-001', Merk: 'INGENICO', Model: 'MOVE5000', TID: 'TID001', MID: 'MID001',
-    'OS/Version': 'v1.0', Condition: 'New', IMEI: '', Status: STATUS.AVAILABLE, 'SN Charger': 'CH-SN-001', 'SN Battery': 'BT-SN-001',
+    'Serial Number': 'SN-DEVICE-001', Merk: 'INGENICO', Model: 'MOVE5000', TID: '', MID: '',
+    'OS/Version': 'v1.0', Condition: 'New', IMEI: '', Koneksi: '4G / GPRS', 'SN Charger': 'CH-SN-001', 'SN Battery': 'BT-SN-001',
+    ...PROCUREMENT_COLUMNS,
   }],
-  sim: [{ ICCID: '8962000000000000001', Provider: 'TELKOMSEL', MSISDN: '081200000001', 'Jenis SIM': 'Public', Status: STATUS.AVAILABLE, 'SN Perangkat': '' }],
-  peripheral: [{ 'Serial Number': 'PERIPH-001', Jenis: 'Modem', Merk: 'HUAWEI', Model: 'E3372', Status: STATUS.AVAILABLE, 'SN Perangkat': '' }],
+  sim: [{ ICCID: '8962000000000000001', Provider: 'TELKOMSEL', MSISDN: '081200000001', 'Jenis SIM': 'Public', 'SN Perangkat': '', ...PROCUREMENT_COLUMNS }],
+  peripheral: [{ 'Serial Number': 'PERIPH-001', Jenis: 'Modem', Merk: 'HUAWEI', Model: 'E3372', 'SN Perangkat': '', ...PROCUREMENT_COLUMNS }],
 };
+
+/** Tanggal dari sel Excel: teks yyyy-mm-dd / dd-mm-yyyy / dd/mm/yyyy, atau nomor seri tanggal Excel. */
+function excelDate(value: string): string {
+  if (!value) return '';
+  if (/^\d{4,5}(\.\d+)?$/.test(value)) {
+    const d = new Date(Math.round((Number(value) - 25569) * 86400 * 1000));
+    return isNaN(d.getTime()) ? '' : format(d, 'yyyy-MM-dd');
+  }
+  const dmy = value.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? '' : format(d, 'yyyy-MM-dd');
+}
 
 export interface ImportResult { imported: number; linked: number; skipped: string[] }
 
 const pick = (value: string, allowed: string[], fallback: string) =>
   allowed.find(a => a.toLowerCase() === value.toLowerCase()) || fallback;
 
-export async function importAssets(rows: Row[], assetType: AssetType, assets: Asset[]): Promise<ImportResult> {
+/**
+ * Import = penerimaan barang massal. `receipt` adalah data GR untuk seluruh file;
+ * kolom pengadaan di baris Excel (jika diisi) menimpa nilai default ini.
+ */
+export async function importAssets(
+  rows: Row[], assetType: AssetType, assets: Asset[], receipt: ReceiptInput & { status: string },
+  suppliers: Supplier[] = [], models: DeviceModel[] = [],
+): Promise<ImportResult> {
   const user = requireUser();
   const known = new Map(assets.map(a => [norm(a.sn), a]));
   const seen = new Set<string>();
@@ -277,13 +366,30 @@ export async function importAssets(rows: Row[], assetType: AssetType, assets: As
 
     const group: ((batch: WriteBatch) => void)[] = [];
     const ref = doc(collection(db, 'edcs'));
-    const status = pick(cell(row, 'Status'), INITIAL_STATUSES, STATUS.AVAILABLE);
-    let data: Record<string, unknown> = { sn, assetType, status, createdAt: serverTimestamp(), ...stamp(user.uid) };
+    // Status awal ditentukan form GR, bukan Excel, supaya unit baru tidak bisa langsung "Terpasang".
+    const status = INITIAL_STATUSES.includes(receipt.status) ? receipt.status : STATUS.INCOMING;
+    let data: Record<string, unknown> = { sn, assetType, status, statusSince: new Date().toISOString(), createdAt: serverTimestamp(), ...stamp(user.uid) };
+    const vendor = cell(row, 'Merk', 'Vendor');
+    const modelName = cell(row, 'Model');
+    try {
+      Object.assign(data, procurementFields({
+        ...emptyAssetInput(assetType), ...receipt, vendor, model: modelName,
+        assetTag: cell(row, 'Asset Tag'),
+        connectionType: pick(cell(row, 'Koneksi'), CONNECTION_TYPES, ''),
+        poNumber: cell(row, 'No. PO') || receipt.poNumber,
+        deliveryNoteNo: cell(row, 'No. Surat Jalan') || receipt.deliveryNoteNo,
+        receivedDate: excelDate(cell(row, 'Tanggal Terima')) || receipt.receivedDate,
+        purchasePrice: cell(row, 'Harga Beli') || receipt.purchasePrice,
+        warrantyUntil: excelDate(cell(row, 'Garansi Sampai')) || receipt.warrantyUntil,
+      }, suppliers, models));
+    } catch (error) {
+      return void result.skipped.push(`Baris ${line}: ${(error as Error).message}`);
+    }
 
     if (assetType === 'perangkat') {
       Object.assign(data, {
-        vendor: cell(row, 'Merk', 'Vendor') || 'UNKNOWN',
-        model: cell(row, 'Model') || 'UNKNOWN',
+        vendor: vendor || 'UNKNOWN',
+        model: modelName || 'UNKNOWN',
         tid: cell(row, 'TID'), mid: cell(row, 'MID'),
         osVersion: cell(row, 'OS/Version', 'OS Version'),
         condition: pick(cell(row, 'Condition', 'Kondisi'), CONDITIONS, 'New'),
@@ -331,7 +437,7 @@ export async function importAssets(rows: Row[], assetType: AssetType, assets: As
     const finalData = stripUndefined(data);
     group.unshift(
       batch => batch.set(ref, finalData),
-      batch => logInitial(batch, ref.id, sn, String(finalData.status), 'Initial stock (Import)'),
+      batch => logReceipt(batch, ref.id, sn, finalData, 'import'),
     );
     ops.push(group);
     result.imported++;

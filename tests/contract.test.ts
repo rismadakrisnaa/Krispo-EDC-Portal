@@ -74,9 +74,25 @@ describe('kontrak per unit', () => {
 });
 
 describe('aturan pergerakan & hak akses', () => {
-  it('unit terpasang hanya bisa direlokasi atau ditarik', () => {
+  it('unit terpasang hanya bisa: relokasi, kunjungan, swap, tarik, atau dilaporkan hilang', () => {
     const allowed = MOVEMENT_RULES.filter(r => r.from.includes(STATUS.INSTALLED)).map(r => r.type);
-    expect(allowed.sort()).toEqual(['Relocation', 'Withdrawal']);
+    expect(allowed.sort()).toEqual(['Lost', 'Maintenance', 'Relocation', 'Swap', 'Withdrawal']);
+  });
+
+  it('setiap status (kecuali status akhir) punya jalan keluar, dan status akhir tidak bisa digerakkan', async () => {
+    const { ALL_STATUSES, CLOSED_STATUSES } = await import('../src/lib/constants');
+    for (const status of ALL_STATUSES) {
+      const exits = MOVEMENT_RULES.filter(r => r.from.includes(status));
+      if (CLOSED_STATUSES.includes(status)) expect(exits.map(r => r.type)).toEqual([]);
+      else expect(exits.length, status).toBeGreaterThan(0);
+    }
+  });
+
+  it('unit baru dari supplier harus lolos QC dulu sebelum bisa dialokasikan / dipasang', () => {
+    for (const type of ['Allocation', 'Delivery', 'Install', 'Staging'] as const) {
+      expect(MOVEMENT_RULES.find(r => r.type === type)!.from).not.toContain(STATUS.INCOMING);
+    }
+    expect(MOVEMENT_RULES.find(r => r.type === 'QC Pass')!.from).toEqual([STATUS.INCOMING]);
   });
 
   it('hanya Install yang menghasilkan status terpasang dari stok', () => {
@@ -93,6 +109,45 @@ describe('aturan pergerakan & hak akses', () => {
     expect(can('Service', 'assets.create')).toBe(false);
     expect(can(null, 'assets.update')).toBe(false);
     expect(can('RoleNgarang', 'assets.update')).toBe(false);
+  });
+});
+
+describe('pergerakan hulu ke hilir', () => {
+  it('disposal wajib metode & pernyataan penghapusan key', async () => {
+    const { missingDetails } = await import('../src/lib/movements');
+    const { movementRule } = await import('../src/lib/constants');
+    const rule = movementRule('Disposal')!;
+    expect(missingDetails(rule, {})).toHaveLength(2);
+    expect(missingDetails(rule, { disposalMethod: 'Dijual', keyZeroized: false })).toHaveLength(1);
+    expect(missingDetails(rule, { disposalMethod: 'Dijual', keyZeroized: true })).toEqual([]);
+    expect(missingDetails(movementRule('Return to Supplier')!, {})[0]).toMatch(/RMA/);
+  });
+
+  it('hilang dari unit terpasang mengakhiri kontrak; hilang dari gudang tidak', async () => {
+    const { endsContract } = await import('../src/lib/movements');
+    const { movementRule } = await import('../src/lib/constants');
+    const lost = movementRule('Lost')!;
+    const installed: any = { status: STATUS.INSTALLED, contractStatus: 'Active' };
+    expect(endsContract(lost, installed)).toBe(true);
+    expect(endsContract(lost, { ...installed, status: STATUS.AVAILABLE })).toBe(false);
+    expect(endsContract(movementRule('Maintenance')!, installed)).toBe(false);
+  });
+
+  it('swap: unit lama harus terpasang dengan kontrak aktif, pengganti dari stok', async () => {
+    const { swapProblem } = await import('../src/lib/movements');
+    const oldA: any = { id: 'o', sn: 'OLD', assetType: 'perangkat', status: STATUS.INSTALLED, contractStatus: 'Active' };
+    const newA: any = { id: 'n', sn: 'NEW', assetType: 'perangkat', status: STATUS.AVAILABLE };
+    expect(swapProblem(oldA, newA)).toBeNull();
+    expect(swapProblem(oldA, { ...newA, status: STATUS.INCOMING })).toMatch(/pengganti/);
+    expect(swapProblem(oldA, { ...newA, id: 'o' })).toMatch(/berbeda/);
+    expect(swapProblem({ ...oldA, contractStatus: undefined }, newA)).toMatch(/kontrak aktif/);
+    expect(swapProblem({ ...oldA, status: STATUS.AVAILABLE }, newA)).toMatch(/Terpasang/);
+  });
+
+  it('mutasi gudang & kunjungan tidak mengubah status', async () => {
+    const { movementRule } = await import('../src/lib/constants');
+    expect(movementRule('Warehouse Transfer')!.keepStatus).toBe(true);
+    expect(movementRule('Maintenance')!.keepStatus).toBe(true);
   });
 });
 

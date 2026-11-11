@@ -17,6 +17,7 @@ const MovementPage = lazy(() => import('./pages/MovementPage').then(m => ({ defa
 const ContractList = lazy(() => import('./pages/ContractList').then(m => ({ default: m.ContractList })));
 const CustomerList = lazy(() => import('./pages/CustomerList').then(m => ({ default: m.CustomerList })));
 const LocationList = lazy(() => import('./pages/LocationList').then(m => ({ default: m.LocationList })));
+const SupplierList = lazy(() => import('./pages/SupplierList').then(m => ({ default: m.SupplierList })));
 const MasterParts = lazy(() => import('./pages/MasterParts').then(m => ({ default: m.MasterParts })));
 const UserManagement = lazy(() => import('./pages/UserManagement').then(m => ({ default: m.UserManagement })));
 
@@ -69,6 +70,7 @@ function CurrentPage() {
       case 'contracts': return <ContractList />;
       case 'customers': return <CustomerList />;
       case 'locations': return <LocationList />;
+      case 'suppliers': return <SupplierList />;
       case 'parts': return <MasterParts />;
       case 'users': return can('users.manage') ? <UserManagement /> : <Dashboard />;
       default: return <Dashboard />;

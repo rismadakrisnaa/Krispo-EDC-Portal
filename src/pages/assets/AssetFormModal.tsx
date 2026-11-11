@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { describeError } from '../../lib/firebase';
-import { ASSET_TYPE_LABEL, CONDITIONS, INITIAL_STATUSES, PERIPHERAL_TYPES, SIM_TYPES, statusMeta, type AssetType } from '../../lib/constants';
-import { createAsset, emptyAssetInput, updateAsset, type AssetInput } from '../../lib/assets';
+import { ASSET_TYPE_LABEL, CONDITIONS, CONNECTION_TYPES, PERIPHERAL_TYPES, SIM_TYPES, type AssetType } from '../../lib/constants';
+import { createAsset, defaultWarranty, emptyAssetInput, findModel, updateAsset, type AssetInput } from '../../lib/assets';
 import { cn } from '../../lib/utils';
 import type { Asset } from '../../lib/types';
 import { useData } from '../../context/DataContext';
+import { ReceiptFields } from './ReceiptFields';
 import { Field, Modal, StatusBadge, btnPrimary, btnSecondary, inputClass, useFeedback } from '../../components/ui';
 
 interface Props {
@@ -17,7 +18,7 @@ interface Props {
 
 /** Satu form untuk registrasi & edit, sehingga field keduanya tidak pernah berbeda. */
 export function AssetFormModal({ open, onClose, assetType, asset }: Props) {
-  const { assets, childrenOf } = useData();
+  const { assets, childrenOf, suppliers, models } = useData();
   const { toast } = useFeedback();
   const [form, setForm] = useState<AssetInput>(emptyAssetInput(assetType));
   const [busy, setBusy] = useState(false);
@@ -38,6 +39,10 @@ export function AssetFormModal({ open, onClose, assetType, asset }: Props) {
       linkTargetSN: asset.parentDeviceSN || '',
       chargerSN: peripherals.find(p => p.peripheralType === 'Charger')?.sn || '',
       batterySN: peripherals.find(p => p.peripheralType === 'Battery')?.sn || '',
+      assetTag: asset.assetTag || '', connectionType: asset.connectionType || '', modelId: asset.modelId || '',
+      supplierId: asset.supplierId || '', poNumber: asset.poNumber || '', deliveryNoteNo: asset.deliveryNoteNo || '',
+      receivedDate: asset.receivedDate?.slice(0, 10) || '', purchasePrice: asset.purchasePrice != null ? String(asset.purchasePrice) : '',
+      warrantyUntil: asset.warrantyUntil?.slice(0, 10) || '',
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, asset?.id, assetType]);
@@ -49,8 +54,8 @@ export function AssetFormModal({ open, onClose, assetType, asset }: Props) {
     e.preventDefault();
     setBusy(true);
     try {
-      if (asset) await updateAsset(asset, form, assets);
-      else await createAsset(form, assets);
+      if (asset) await updateAsset(asset, form, assets, suppliers, models);
+      else await createAsset(form, assets, suppliers, models);
       toast(isEdit ? `Data ${form.sn} diperbarui.` : `${ASSET_TYPE_LABEL[type]} ${form.sn.trim()} terdaftar.`);
       onClose();
     } catch (error) {
@@ -60,6 +65,11 @@ export function AssetFormModal({ open, onClose, assetType, asset }: Props) {
       setBusy(false);
     }
   }
+
+  // Model dari master: isi otomatis garansi bila belum diisi.
+  const matchedModel = type === 'perangkat' ? findModel(models, form.vendor, form.model) : undefined;
+  const autoWarranty = defaultWarranty(form.receivedDate, matchedModel);
+  const brands = Array.from(new Set(models.map(m => m.brand))).sort();
 
   const snLabel = type === 'sim' ? 'ICCID (Serial Number)' : type === 'peripheral' ? 'Serial Number Peripheral' : 'Serial Number';
   const freeDevices = assets.filter(a => a.assetType === 'perangkat');
@@ -75,8 +85,21 @@ export function AssetFormModal({ open, onClose, assetType, asset }: Props) {
 
           {type === 'perangkat' && (
             <>
-              <Field label="Merk (Vendor)"><input required maxLength={100} className={inputClass} value={form.vendor} onChange={set('vendor')} /></Field>
-              <Field label="Model"><input required maxLength={100} className={inputClass} value={form.model} onChange={set('model')} /></Field>
+              <Field label="Merk (Brand)" hint={models.length ? 'Pilih dari master atau ketik baru.' : undefined}>
+                <input required list="brand-list" maxLength={100} className={inputClass} value={form.vendor} onChange={set('vendor')} />
+              </Field>
+              <Field label="Model / Tipe" hint={matchedModel ? `${matchedModel.category || 'Model terdaftar'} · garansi ${matchedModel.warrantyMonths || 0} bln` : undefined}>
+                <input required list="model-list" maxLength={100} className={inputClass} value={form.model} onChange={set('model')} />
+              </Field>
+              <datalist id="brand-list">{brands.map(b => <option key={b} value={b} />)}</datalist>
+              <datalist id="model-list">{models.filter(m => !form.vendor || m.brand.toLowerCase() === form.vendor.trim().toLowerCase()).map(m => <option key={m.id} value={m.model}>{m.brand}</option>)}</datalist>
+              <Field label="Asset Tag / No. Aset Internal"><input maxLength={64} className={inputClass} value={form.assetTag} onChange={set('assetTag')} /></Field>
+              <Field label="Koneksi">
+                <select className={inputClass} value={form.connectionType} onChange={set('connectionType')}>
+                  <option value="">-</option>
+                  {CONNECTION_TYPES.map(c => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
               <Field label="Terminal ID (TID)"><input maxLength={64} className={inputClass} value={form.tid} onChange={set('tid')} /></Field>
               <Field label="Merchant ID (MID)"><input maxLength={64} className={inputClass} value={form.mid} onChange={set('mid')} /></Field>
               <Field label="OS / Version"><input className={inputClass} value={form.osVersion} onChange={set('osVersion')} /></Field>
@@ -126,20 +149,19 @@ export function AssetFormModal({ open, onClose, assetType, asset }: Props) {
             </Field>
           )}
 
-          {isEdit ? (
+          {isEdit && (
             <div className="col-span-2 flex items-center justify-between gap-3 p-3 bg-gray-50 border border-brand-border rounded-lg">
               <span className="text-[11px] text-brand-text-muted leading-snug">Status hanya berubah lewat menu <b>Pergerakan EDC</b>, supaya riwayat & kontrak selalu tercatat.</span>
               <StatusBadge status={asset!.status} />
             </div>
-          ) : (
-            !form.linkTargetSN.trim() && (
-              <Field label="Status Awal" className="col-span-2">
-                <select className={inputClass} value={form.status} onChange={set('status')}>
-                  {INITIAL_STATUSES.map(s => <option key={s} value={s}>{statusMeta(s).label}</option>)}
-                </select>
-              </Field>
-            )
           )}
+
+          <ReceiptFields
+            value={form}
+            onChange={setForm}
+            showStatus={!isEdit && !form.linkTargetSN.trim()}
+            warrantyHint={!form.warrantyUntil && autoWarranty ? `Kosongkan = otomatis ${autoWarranty} (dari master model).` : undefined}
+          />
         </div>
 
         <div className="flex gap-3 pt-2">

@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { ArrowLeftRight, ArrowRight, Box, Download, Edit2, FileCheck, History, X } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, Box, Download, Edit2, ExternalLink, FileCheck, X } from 'lucide-react';
 import { db, describeError } from '../../lib/firebase';
 import { movementLabel, statusMeta } from '../../lib/constants';
 import { contractHealth } from '../../lib/contract';
 import { linkToDevice, unlinkFromDevice } from '../../lib/assets';
 import { redownloadBA } from '../../lib/movements';
 import { downloadAssetReportPDF } from '../../lib/baGenerator';
-import { cn, formatDate, formatIDR, locationLabel } from '../../lib/utils';
+import { cn, daysBetween, formatDate, formatDuration, formatIDR, locationLabel, mapsUrl, movementDetailText } from '../../lib/utils';
 import type { Asset, Movement } from '../../lib/types';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
@@ -25,7 +25,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string | null; onClose: () => void; onEdit: (asset: Asset) => void }) {
   // Selalu baca data live dari context, bukan salinan saat modal dibuka.
-  const { assets, assetById, customerById, childrenOf } = useData();
+  const { assets, assetById, customerById, childrenOf, locationById } = useData();
   const { can } = useAuth();
   const { go, startMovement } = useNav();
   const { toast, confirm } = useFeedback();
@@ -45,7 +45,9 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
       .then(snap => {
         if (cancelled) return;
         const rows = snap.docs.map(d => ({ ...d.data(), id: d.id }) as Movement);
-        rows.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+        // Urut menurut tanggal efektif transaksi, lalu waktu pencatatan.
+        const when = (m: Movement) => `${m.transactionDate || ''}|${String(m.timestamp?.toMillis() || 0).padStart(15, '0')}`;
+        rows.sort((a, b) => when(b).localeCompare(when(a)));
         setHistory(rows);
       })
       .catch(error => { console.error(error); if (!cancelled) setHistory([]); });
@@ -58,6 +60,12 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
   const customer = asset.currentCustomerId ? customerById.get(asset.currentCustomerId) : undefined;
   const contract = contractHealth(asset);
   const totalPenalty = (asset.penaltyAmount || 0) + (asset.partPenaltyAmount || 0);
+  const location = asset.currentLocationId ? locationById.get(asset.currentLocationId) : undefined;
+  const maps = location ? mapsUrl(location) : null;
+  const warrantyLeft = asset.warrantyUntil ? Math.floor((new Date(asset.warrantyUntil).getTime() - Date.now()) / 86_400_000) : null;
+  // Lama tiap tahap = jarak ke transaksi berikutnya (yang terbaru: sampai hari ini).
+  const effectiveDate = (m: Movement) => m.transactionDate || m.timestamp?.toDate().toISOString();
+  const stageDays = (history || []).map((m, i, list) => daysBetween(effectiveDate(m), i === 0 ? new Date() : effectiveDate(list[i - 1])));
 
   const run = async (action: () => Promise<unknown>, success?: string) => {
     setBusy(true);
@@ -144,8 +152,23 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
                 ? <button className="text-brand-primary hover:underline" onClick={() => { onClose(); go('customers', { q: asset.customerName || '' }); }}>{asset.customerName}</button>
                 : '(Gudang)'}
             </Row>
-            <Row label="Lokasi">{locationLabel(asset)}</Row>
-            <Row label="Update Terakhir">{formatDate(asset.updatedAt, 'dd MMM yyyy HH:mm')}</Row>
+            <Row label={location?.type === 'Merchant Site' ? 'Merchant' : 'Lokasi'}>
+              {locationLabel(asset)}{location?.merchantCode ? ` (${location.merchantCode})` : ''}
+            </Row>
+            {location && (
+              <>
+                <Row label="Alamat">{location.address}</Row>
+                <Row label="Kota / Provinsi">{[location.city, location.province, location.postalCode].filter(Boolean).join(', ')}</Row>
+                <Row label="Region">{location.region}</Row>
+                {(location.picName || location.picPhone) && <Row label="PIC">{[location.picName, location.picPhone].filter(Boolean).join(' · ')}</Row>}
+                {maps && (
+                  <a href={maps} target="_blank" rel="noreferrer" className="text-[11px] font-bold text-brand-primary hover:underline flex items-center gap-1">
+                    Buka di Google Maps <ExternalLink size={11} />
+                  </a>
+                )}
+              </>
+            )}
+            <Row label="Di Status Ini">{formatDuration(daysBetween(asset.statusSince || asset.updatedAt))}</Row>
 
             {asset.assetType === 'perangkat' && asset.contractStatus && (
               <div className="pt-2 space-y-3">
@@ -160,6 +183,37 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
             )}
           </section>
         </div>
+
+        {asset.assetType === 'perangkat' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-6">
+            <section className="space-y-3">
+              <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em]">Pengadaan</p>
+              <Row label="Asset Tag">{asset.assetTag}</Row>
+              <Row label="Supplier">{asset.supplierName}</Row>
+              <Row label="No. PO / Surat Jalan">{[asset.poNumber, asset.deliveryNoteNo].filter(Boolean).join(' / ')}</Row>
+              <Row label="Tanggal Terima">{formatDate(asset.receivedDate)}</Row>
+              <Row label="Harga Beli">{asset.purchasePrice != null ? formatIDR(asset.purchasePrice) : '-'}</Row>
+              <Row label="Garansi">
+                {asset.warrantyUntil ? (
+                  <span className={cn(warrantyLeft != null && warrantyLeft < 0 ? 'text-red-600' : warrantyLeft != null && warrantyLeft <= 30 ? 'text-amber-600' : '')}>
+                    s/d {formatDate(asset.warrantyUntil)}{warrantyLeft != null && warrantyLeft < 0 ? ' (habis)' : ''}
+                  </span>
+                ) : '-'}
+              </Row>
+              <Row label="Umur Aset">{formatDuration(daysBetween(asset.receivedDate || asset.createdAt))}</Row>
+            </section>
+            <section className="space-y-3">
+              <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em]">Operasional</p>
+              <Row label="Koneksi">{asset.connectionType}</Row>
+              <Row label="Tanggal Pasang">{formatDate(asset.installedDate)}</Row>
+              <Row label="Kunjungan Terakhir">{formatDate(asset.lastVisitDate)}</Row>
+              <Row label="Teknisi Terakhir">{asset.lastTechnician}</Row>
+              <Row label="Jumlah Perbaikan">{asset.repairCount ? `${asset.repairCount}x` : '-'}</Row>
+              <Row label="Biaya Perbaikan">{asset.repairCostTotal ? formatIDR(asset.repairCostTotal) : '-'}</Row>
+              {asset.disposalMethod && <Row label="Penghapusan">{asset.disposalMethod} · {formatDate(asset.disposalDate)}{asset.disposalValue ? ` · ${formatIDR(asset.disposalValue)}` : ''}</Row>}
+            </section>
+          </div>
+        )}
 
         {/* Tautan SIM / peripheral */}
         {asset.assetType === 'perangkat' ? (
@@ -208,7 +262,7 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
 
         {/* Riwayat */}
         <section className="space-y-3">
-          <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em]">Riwayat Pergerakan</p>
+          <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em]">Timeline Siklus Hidup</p>
           {history === null ? (
             <div className="flex justify-center py-6 text-brand-text-muted"><Spinner /></div>
           ) : history.length === 0 ? (
@@ -216,33 +270,48 @@ export function AssetDetailModal({ assetId, onClose, onEdit }: { assetId: string
               {asset.parentDeviceId ? 'Riwayat tercatat pada perangkat induknya.' : 'Belum ada riwayat.'}
             </p>
           ) : (
-            <div className="space-y-2">
-              {history.map(move => (
-                <div key={move.id} className="flex items-center justify-between gap-3 p-3 bg-gray-50/60 rounded-xl border border-brand-border">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-white border border-brand-border flex items-center justify-center text-brand-primary shrink-0"><History size={15} /></div>
-                    <div className="min-w-0">
+            <ol className="relative border-l-2 border-brand-border ml-2 space-y-3">
+              {history.map((move, i) => (
+                <li key={move.id} className="ml-5 relative">
+                  <span
+                    className="absolute -left-[27px] top-3 w-3 h-3 rounded-full border-2 border-white"
+                    style={{ background: statusMeta(move.toStatus).chart }}
+                    aria-hidden="true"
+                  />
+                  <div className="flex items-start justify-between gap-3 p-3 bg-gray-50/60 rounded-xl border border-brand-border">
+                    <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-xs font-bold text-brand-text-main">{movementLabel(move.type)}</span>
                         <ArrowRight size={10} className="text-gray-400" />
                         <StatusBadge status={move.toStatus} />
+                        {stageDays[i] != null && (
+                          <span className="text-[10px] font-bold text-brand-text-muted" title={i === 0 ? 'Sampai hari ini' : 'Sampai transaksi berikutnya'}>
+                            · {formatDuration(stageDays[i])}{i === 0 ? ' (sekarang)' : ''}
+                          </span>
+                        )}
                       </div>
-                      <p className={cn('text-[10px] text-brand-text-muted font-bold mt-0.5 truncate')}>
-                        {formatDate(move.timestamp, 'dd MMM yyyy HH:mm')} · {move.userName || 'System'}{move.customerName ? ` · ${move.customerName}` : ''}
+                      <p className="text-[10px] text-brand-text-muted font-bold">
+                        {formatDate(move.transactionDate || move.timestamp, 'dd MMM yyyy')} · {move.userName || 'System'}
+                        {[move.customerName, move.toLocationName].filter(Boolean).length ? ` · ${[move.customerName, move.toLocationName].filter(Boolean).join(' · ')}` : ''}
                       </p>
+                      {movementDetailText(move) && <p className="text-[11px] text-brand-text-main">{movementDetailText(move)}</p>}
+                      {(move.penaltyAmount || 0) + (move.partPenaltyAmount || 0) > 0 && (
+                        <p className="text-[11px] font-bold text-red-600">Denda {formatIDR((move.penaltyAmount || 0) + (move.partPenaltyAmount || 0))}</p>
+                      )}
+                      {move.notes && <p className="text-[11px] text-brand-text-muted italic">"{move.notes}"</p>}
                     </div>
+                    {move.baGenerated && (
+                      <button
+                        disabled={busy} onClick={() => run(() => redownloadBA(move, assetById, customerById))}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-emerald-200 text-emerald-700 rounded-lg text-[10px] font-bold uppercase hover:bg-emerald-50 shrink-0"
+                      >
+                        <FileCheck size={12} /> BA
+                      </button>
+                    )}
                   </div>
-                  {move.baGenerated && (
-                    <button
-                      disabled={busy} onClick={() => run(() => redownloadBA(move, assetById, customerById))}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-emerald-200 text-emerald-700 rounded-lg text-[10px] font-bold uppercase hover:bg-emerald-50 shrink-0"
-                    >
-                      <FileCheck size={12} /> BA
-                    </button>
-                  )}
-                </div>
+                </li>
               ))}
-            </div>
+            </ol>
           )}
         </section>
       </div>

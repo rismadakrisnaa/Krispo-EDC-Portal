@@ -3,9 +3,9 @@ import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestor
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { AlertTriangle, ArrowRight, Box, CheckCircle, History, Package, ShieldCheck, Smartphone, Truck, Wrench, Zap } from 'lucide-react';
 import { db } from '../lib/firebase';
-import { ASSET_TYPE_LABEL, PROBLEM_STATUSES, STATUS, STOCK_STATUSES, TRANSIT_STATUSES, movementLabel, statusMeta, type AssetType } from '../lib/constants';
+import { ASSET_TYPE_LABEL, CLOSED_STATUSES, IDLE_STOCK_DAYS, PROBLEM_STATUSES, STATUS, STOCK_STATUSES, TRANSIT_STATUSES, movementLabel, statusMeta, type AssetType } from '../lib/constants';
 import { contractHealth } from '../lib/contract';
-import { cn, formatDate, formatIDR } from '../lib/utils';
+import { cn, daysBetween, formatDate, formatIDR } from '../lib/utils';
 import type { Movement } from '../lib/types';
 import { useData } from '../context/DataContext';
 import { useNav } from '../context/NavContext';
@@ -30,7 +30,8 @@ export function Dashboard() {
   }, []);
 
   const stats = useMemo(() => {
-    const list = assets.filter(a => a.assetType === tab);
+    // Armada aktif: unit yang sudah hilang / dihapuskan / diretur tidak dihitung.
+    const list = assets.filter(a => a.assetType === tab && !CLOSED_STATUSES.includes(a.status));
     const byStatus = new Map<string, number>();
     for (const a of list) byStatus.set(a.status, (byStatus.get(a.status) || 0) + 1);
     const count = (...statuses: string[]) => statuses.reduce((sum, s) => sum + (byStatus.get(s) || 0), 0);
@@ -67,24 +68,34 @@ export function Dashboard() {
       penaltyUnits: devices.filter(a => (a.penaltyAmount || 0) + (a.partPenaltyAmount || 0) > 0).length,
       incoming: devices.filter(a => a.status === STATUS.INCOMING).length,
       repair: devices.filter(a => a.status === STATUS.REPAIR).length,
+      damaged: devices.filter(a => a.status === STATUS.DAMAGED).length,
+      idle: devices.filter(a => STOCK_STATUSES.includes(a.status) && (daysBetween(a.statusSince || a.updatedAt) ?? 0) >= IDLE_STOCK_DAYS).length,
+      warrantyEnding: devices.filter(a => {
+        if (!a.warrantyUntil || CLOSED_STATUSES.includes(a.status)) return false;
+        const days = (new Date(a.warrantyUntil).getTime() - Date.now()) / 86_400_000;
+        return days >= 0 && days <= 30;
+      }).length,
     };
   }, [assets]);
 
   const openInventory = (status: string) => go('inventory', { section: tab, status });
 
   const cards = [
-    { title: `Total ${ASSET_TYPE_LABEL[tab]}`, value: stats.total, color: 'bg-brand-primary', text: 'text-brand-text-main', icon: Package, status: '' },
+    { title: `${ASSET_TYPE_LABEL[tab]} Aktif`, value: stats.total, color: 'bg-brand-primary', text: 'text-brand-text-main', icon: Package, status: 'active' },
     { title: 'Stok Gudang', value: stats.stock, color: 'bg-emerald-500', text: 'text-emerald-600', icon: CheckCircle, status: 'stock' },
     { title: 'Terpasang', value: stats.installed, color: 'bg-blue-500', text: 'text-blue-600', icon: Smartphone, status: STATUS.INSTALLED },
     { title: 'Alokasi / Kirim', value: stats.transit, color: 'bg-amber-500', text: 'text-amber-600', icon: Truck, status: 'transit' },
-    { title: 'Perbaikan / Rusak', value: stats.problem, color: 'bg-red-500', text: 'text-red-600', icon: Wrench, status: 'problem' },
+    { title: 'Perlu Tindakan', value: stats.problem, color: 'bg-red-500', text: 'text-red-600', icon: Wrench, status: 'problem' },
   ];
 
   const alerts = [
     { show: attention.ending > 0, text: `${attention.ending} kontrak berakhir dalam 30 hari`, onClick: () => go('contracts', { health: 'ending' }) },
     { show: attention.penaltyUnits > 0, text: `${attention.penaltyUnits} unit punya denda tercatat, total ${formatIDR(attention.penalties)}`, onClick: () => go('contracts', { health: 'terminated' }) },
-    { show: attention.incoming > 0, text: `${attention.incoming} perangkat stok masuk belum diterima gudang`, onClick: () => go('inventory', { section: 'perangkat', status: STATUS.INCOMING }) },
+    { show: attention.incoming > 0, text: `${attention.incoming} perangkat dari supplier menunggu QC`, onClick: () => go('inventory', { section: 'perangkat', status: STATUS.INCOMING }) },
+    { show: attention.idle > 0, text: `${attention.idle} perangkat menganggur di gudang ≥ ${IDLE_STOCK_DAYS} hari`, onClick: () => go('inventory', { section: 'perangkat', status: 'stock', aging: String(IDLE_STOCK_DAYS) }) },
+    { show: attention.warrantyEnding > 0, text: `${attention.warrantyEnding} perangkat garansinya habis dalam 30 hari`, onClick: () => go('inventory', { section: 'perangkat', warranty: 'expiring' }) },
     { show: attention.repair > 0, text: `${attention.repair} perangkat sedang diperbaiki`, onClick: () => go('inventory', { section: 'perangkat', status: STATUS.REPAIR }) },
+    { show: attention.damaged > 0, text: `${attention.damaged} perangkat rusak menunggu keputusan (perbaikan, retur, atau penghapusan)`, onClick: () => go('inventory', { section: 'perangkat', status: STATUS.DAMAGED }) },
   ].filter(a => a.show);
 
   return (

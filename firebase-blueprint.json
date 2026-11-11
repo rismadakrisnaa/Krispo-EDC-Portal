@@ -42,6 +42,7 @@
           "enum": [
             "Incoming Stock",
             "Available in Warehouse",
+            "Staged / Ready",
             "Reserved / Allocated",
             "In Delivery",
             "Installed / Active",
@@ -49,6 +50,7 @@
             "Under Repair",
             "Damaged",
             "Lost",
+            "Returned to Supplier",
             "Retired"
           ],
           "description": "Current status of the device"
@@ -184,6 +186,70 @@
         "createdAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "statusSince": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Since when the unit is in its current status (aging)"
+        },
+        "assetTag": {
+          "type": "string"
+        },
+        "modelId": {
+          "type": "string"
+        },
+        "supplierId": {
+          "type": "string"
+        },
+        "supplierName": {
+          "type": "string"
+        },
+        "poNumber": {
+          "type": "string"
+        },
+        "deliveryNoteNo": {
+          "type": "string"
+        },
+        "receivedDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "purchasePrice": {
+          "type": "number"
+        },
+        "warrantyUntil": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "connectionType": {
+          "type": "string"
+        },
+        "installedDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastVisitDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastTechnician": {
+          "type": "string"
+        },
+        "repairCount": {
+          "type": "number"
+        },
+        "repairCostTotal": {
+          "type": "number"
+        },
+        "disposalMethod": {
+          "type": "string"
+        },
+        "disposalDate": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "disposalValue": {
+          "type": "number"
         }
       },
       "required": [
@@ -236,7 +302,7 @@
     },
     "location": {
       "title": "Location",
-      "description": "Warehouses, Merchant Sites, or Service Centers.",
+      "description": "Merchant outlet (owned by a customer), warehouse, or service center.",
       "type": "object",
       "properties": {
         "name": {
@@ -255,7 +321,34 @@
         },
         "customerId": {
           "type": "string",
-          "description": "Owning customer (Merchant Site only)"
+          "description": "Owning customer (required for Merchant Site)"
+        },
+        "city": {
+          "type": "string"
+        },
+        "province": {
+          "type": "string"
+        },
+        "postalCode": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "latitude": {
+          "type": "number"
+        },
+        "longitude": {
+          "type": "number"
+        },
+        "picName": {
+          "type": "string"
+        },
+        "picPhone": {
+          "type": "string"
+        },
+        "merchantCode": {
+          "type": "string"
         }
       },
       "required": [
@@ -316,7 +409,7 @@
         },
         "type": {
           "type": "string",
-          "description": "Allocation | Delivery | Install | Relocation | Withdrawal | Repair | Return to Stock | Write-off | Initial stock | Initial stock (Import) | Cancel Termination"
+          "description": "Goods Receipt | QC Pass | Return to Supplier | Staging | Warehouse Transfer | Allocation | Delivery | Install | Relocation | Maintenance | Swap Out | Swap In | Repair | Return to Stock | Withdrawal | Write-off | Lost | Disposal | Cancel Termination"
         },
         "fromStatus": {
           "type": "string"
@@ -406,6 +499,45 @@
           "items": {
             "type": "object"
           }
+        },
+        "referenceNo": {
+          "type": "string"
+        },
+        "courier": {
+          "type": "string"
+        },
+        "serviceVendor": {
+          "type": "string"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "conditionAfter": {
+          "type": "string"
+        },
+        "disposalMethod": {
+          "type": "string"
+        },
+        "disposalValue": {
+          "type": "number"
+        },
+        "keyZeroized": {
+          "type": "boolean"
+        },
+        "supplierName": {
+          "type": "string"
+        },
+        "poNumber": {
+          "type": "string"
+        },
+        "swapWithSn": {
+          "type": "string"
+        },
+        "tid": {
+          "type": "string"
+        },
+        "mid": {
+          "type": "string"
         }
       },
       "required": [
@@ -480,6 +612,60 @@
         "name",
         "price"
       ]
+    },
+    "supplier": {
+      "title": "Supplier",
+      "description": "Vendor / distributor that supplies devices.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "contactName": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "deviceModel": {
+      "title": "Device Model",
+      "description": "Brand and type of device, with default warranty.",
+      "type": "object",
+      "properties": {
+        "brand": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "warrantyMonths": {
+          "type": "number"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "brand",
+        "model"
+      ]
     }
   },
   "firestore": {
@@ -510,6 +696,14 @@
     "edc_parts/{partId}": {
       "schema": "edcPart",
       "description": "Master list of parts"
+    },
+    "suppliers/{supplierId}": {
+      "schema": "supplier",
+      "description": "Device suppliers"
+    },
+    "device_models/{modelId}": {
+      "schema": "deviceModel",
+      "description": "Device brands & types"
     }
   }
 }

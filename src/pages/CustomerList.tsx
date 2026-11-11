@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { addDoc, collection, deleteDoc, doc, serverTimestamp, updateDoc, writeBatch } from 'firebase/firestore';
-import { Download, Edit2, FileUp, Mail, MapPin, Plus, Search, ShieldAlert, Smartphone, Trash2, Users } from 'lucide-react';
+import { Download, Edit2, FileUp, Mail, MapPin, Plus, Search, ShieldAlert, Smartphone, Trash2, Users, Store } from 'lucide-react';
 import { db, describeError } from '../lib/firebase';
 import { CONTRACT_STATUS, CUSTOMER_CATEGORIES, DEFAULT_CONTRACT_MONTHS, SCHEMES, STATUS } from '../lib/constants';
 import { cell, readExcel, writeExcel } from '../lib/excel';
@@ -22,7 +22,7 @@ const toPayload = (form: Form) => ({
 });
 
 export function CustomerList() {
-  const { customers, assets } = useData();
+  const { customers, assets, locations } = useData();
   const { can } = useAuth();
   const { params, go } = useNav();
   const { toast, confirm } = useFeedback();
@@ -50,6 +50,12 @@ export function CustomerList() {
     }
     return stats;
   }, [assets]);
+
+  const merchantCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of locations) if (l.type === 'Merchant Site' && l.customerId) counts.set(l.customerId, (counts.get(l.customerId) || 0) + 1);
+    return counts;
+  }, [locations]);
 
   const filtered = customers.filter(c => matchesSearch(search, c.name, c.picName, c.email, c.category, c.address));
   const set = (field: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
@@ -139,7 +145,7 @@ export function CustomerList() {
   const handleExport = () => writeExcel(customers.map(c => ({
     'Customer Name': c.name, Email: c.email, Category: c.category || '', 'PIC Name': c.picName || '', 'Contact Number': c.contact || '', Address: c.address || '',
     Scheme: c.scheme || '', Value: c.value || 0, Duration: c.contractDuration || 0,
-    'Unit Dipegang': unitStats.get(c.id)?.held || 0, 'Unit Terpasang': unitStats.get(c.id)?.installed || 0,
+    'Jumlah Merchant': merchantCount.get(c.id) || 0, 'Unit Dipegang': unitStats.get(c.id)?.held || 0, 'Unit Terpasang': unitStats.get(c.id)?.installed || 0,
   })), 'Customers', 'Master_Customer.xlsx').catch(error => toast(describeError(error), 'error'));
 
   return (
@@ -191,7 +197,10 @@ export function CustomerList() {
                   <div><p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Sewa / Unit</p><p className={cn('text-xs font-black', Number(c.value) > 0 ? 'text-brand-text-main' : 'text-red-600')}>{formatIDR(c.value)}</p></div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 mt-auto">
+                <div className="grid grid-cols-3 gap-2 mt-auto">
+                  <button onClick={() => go('locations', { customer: c.id })} className="py-2 bg-gray-50 text-brand-text-muted rounded-xl text-[10px] font-bold uppercase tracking-wide hover:bg-gray-100 border border-brand-border flex items-center justify-center gap-1.5">
+                    <Store size={12} /> Merchant ({merchantCount.get(c.id) || 0})
+                  </button>
                   <button onClick={() => go('inventory', { customer: c.id })} className="py-2 bg-brand-primary-light text-brand-primary rounded-xl text-[10px] font-bold uppercase tracking-wide hover:bg-brand-primary hover:text-white transition-all flex items-center justify-center gap-1.5">
                     <Smartphone size={12} /> Aset ({stats.held})
                   </button>

@@ -2,11 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeftRight, Box, CheckSquare, Download, Edit2, Eye, FileUp, Filter, Hash, Package, Plus, Smartphone, Square, Tag, Trash2, X, Zap } from 'lucide-react';
 import { format } from 'date-fns';
 import { describeError } from '../lib/firebase';
-import { ALL_STATUSES, ASSET_TYPE_LABEL, CONDITIONS, SIM_TYPES, STATUS_GROUPS, matchesStatusFilter, statusMeta, type AssetType } from '../lib/constants';
+import { ALL_STATUSES, ASSET_TYPE_LABEL, CONDITIONS, IDLE_STOCK_DAYS, SIM_TYPES, STATUS_GROUPS, STOCK_STATUSES, matchesStatusFilter, statusMeta, type AssetType } from '../lib/constants';
 import { contractHealth } from '../lib/contract';
 import { deleteAssets, deleteBlocker } from '../lib/assets';
 import { writeExcel } from '../lib/excel';
-import { cn, formatDate, locationLabel, matchesSearch } from '../lib/utils';
+import { cn, daysBetween, formatDate, formatDuration, locationLabel, matchesSearch } from '../lib/utils';
 import type { Asset } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
@@ -24,10 +24,23 @@ const SECTIONS: { id: AssetType; sub: string; icon: React.ElementType }[] = [
   { id: 'peripheral', sub: 'Charger, Battery, Modem', icon: Box },
 ];
 
-const defaultFilters = { status: 'All', customer: 'All', vendor: 'All', condition: 'All', provider: 'All', simType: 'All' };
+const defaultFilters = {
+  status: 'active', customer: 'All', vendor: 'All', condition: 'All', provider: 'All', simType: 'All',
+  region: 'All', supplier: 'All', location: 'All', aging: 'All', warranty: 'All',
+};
+
+const WARRANTY_SOON_DAYS = 30;
+/** Status garansi sebuah unit dibanding hari ini. */
+function warrantyState(a: Asset): 'none' | 'active' | 'expiring' | 'expired' {
+  if (!a.warrantyUntil) return 'none';
+  const days = Math.floor((new Date(a.warrantyUntil).getTime() - Date.now()) / 86_400_000);
+  if (Number.isNaN(days)) return 'none';
+  if (days < 0) return 'expired';
+  return days <= WARRANTY_SOON_DAYS ? 'expiring' : 'active';
+}
 
 export function EDCList() {
-  const { assets, customers, childrenOf } = useData();
+  const { assets, customers, childrenOf, locationById, suppliers, locations } = useData();
   const { can } = useAuth();
   const { params, go, startMovement } = useNav();
   const { toast, confirm } = useFeedback();
@@ -46,8 +59,12 @@ export function EDCList() {
   useEffect(() => {
     if (params.section && SECTIONS.some(s => s.id === params.section)) setSection(params.section as AssetType);
     setSearch(params.q || '');
-    setFilters({ ...defaultFilters, status: params.status || 'All', customer: params.customer || 'All' });
-    setShowFilters(!!(params.status || params.customer));
+    setFilters({
+      ...defaultFilters,
+      status: params.status || defaultFilters.status, customer: params.customer || 'All', supplier: params.supplier || 'All',
+      location: params.location || 'All', region: params.region || 'All', aging: params.aging || 'All', warranty: params.warranty || 'All',
+    });
+    setShowFilters(['status', 'customer', 'supplier', 'location', 'region', 'aging', 'warranty'].some(k => params[k]));
     setSelectedIds([]);
     setPage(1);
   }, [params]);
@@ -55,17 +72,26 @@ export function EDCList() {
   const inSection = useMemo(() => assets.filter(a => a.assetType === section), [assets, section]);
 
   const filtered = useMemo(() => inSection.filter(a =>
-    matchesSearch(search, a.sn, a.vendor, a.model, a.tid, a.mid, a.customerName, a.provider, a.msisdn, a.parentDeviceSN, a.peripheralType) &&
+    matchesSearch(
+      search, a.sn, a.assetTag, a.vendor, a.model, a.tid, a.mid, a.customerName, a.locationName, a.provider, a.msisdn, a.parentDeviceSN,
+      a.peripheralType, a.poNumber, a.supplierName, a.currentLocationId && locationById.get(a.currentLocationId)?.city,
+    ) &&
+    (filters.region === 'All' || (a.currentLocationId && locationById.get(a.currentLocationId)?.region) === filters.region) &&
+    (filters.supplier === 'All' || a.supplierId === filters.supplier) &&
+    (filters.location === 'All' || a.currentLocationId === filters.location) &&
+    (filters.aging === 'All' || (daysBetween(a.statusSince || a.updatedAt) ?? 0) >= Number(filters.aging)) &&
+    (filters.warranty === 'All' || warrantyState(a) === filters.warranty) &&
     matchesStatusFilter(filters.status, a.status) &&
     (filters.customer === 'All' || a.currentCustomerId === filters.customer) &&
     (filters.vendor === 'All' || a.vendor === filters.vendor) &&
     (filters.condition === 'All' || a.condition === filters.condition) &&
     (filters.provider === 'All' || a.provider === filters.provider) &&
     (filters.simType === 'All' || a.simType === filters.simType),
-  ), [inSection, search, filters]);
+  ), [inSection, search, filters, locationById]);
 
   const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const activeFilterCount = Object.values(filters).filter(v => v !== 'All').length;
+  const activeFilterCount = (Object.keys(filters) as (keyof typeof defaultFilters)[]).filter(k => filters[k] !== defaultFilters[k]).length;
+  const regions = useMemo(() => Array.from(new Set(locations.map(l => l.region).filter(Boolean) as string[])).sort(), [locations]);
   const vendors = useMemo(() => Array.from(new Set<string>(inSection.map(a => a.vendor || '').filter(Boolean))).sort(), [inSection]);
   const providers = useMemo(() => Array.from(new Set<string>(inSection.map(a => a.provider || '').filter(Boolean))).sort(), [inSection]);
   const counts = useMemo(() => {
@@ -81,7 +107,7 @@ export function EDCList() {
   const changeSection = (next: AssetType) => {
     setSection(next);
     setSelectedIds([]);
-    setFilters(prev => ({ ...defaultFilters, status: prev.status, customer: prev.customer }));
+    setFilters(prev => ({ ...defaultFilters, status: prev.status, customer: prev.customer, region: prev.region, location: prev.location }));
     setPage(1);
   };
   const resetFilters = () => {
@@ -127,13 +153,30 @@ export function EDCList() {
   async function handleExport() {
     if (filtered.length === 0) return toast('Tidak ada data untuk diexport.', 'info');
     const rows = filtered.map(a => {
-      const base = { 'Serial Number': a.sn, Status: statusMeta(a.status).label, Customer: a.customerName || '(Gudang)', Lokasi: locationLabel(a), 'Update Terakhir': formatDate(a.updatedAt, 'yyyy-MM-dd HH:mm') };
+      const loc = a.currentLocationId ? locationById.get(a.currentLocationId) : undefined;
+      const base = {
+        'Serial Number': a.sn, 'Asset Tag': a.assetTag || '', Status: statusMeta(a.status).label,
+        'Lama di Status (hari)': daysBetween(a.statusSince || a.updatedAt) ?? '',
+        Customer: a.customerName || '(Gudang)', 'Merchant / Lokasi': locationLabel(a), 'Kode Merchant': loc?.merchantCode || '',
+        Alamat: loc?.address || '', Kota: loc?.city || '', Provinsi: loc?.province || '', 'Kode Pos': loc?.postalCode || '', Region: loc?.region || '',
+        Latitude: loc?.latitude ?? '', Longitude: loc?.longitude ?? '', 'PIC Merchant': loc?.picName || '', 'Telepon PIC': loc?.picPhone || '',
+        Supplier: a.supplierName || '', 'No. PO': a.poNumber || '', 'No. Surat Jalan': a.deliveryNoteNo || '',
+        'Tanggal Terima': formatDate(a.receivedDate, 'yyyy-MM-dd'), 'Harga Beli': a.purchasePrice ?? '',
+        'Garansi Sampai': formatDate(a.warrantyUntil, 'yyyy-MM-dd'), 'Umur Aset (hari)': daysBetween(a.receivedDate || a.createdAt) ?? '',
+        'Update Terakhir': formatDate(a.updatedAt, 'yyyy-MM-dd HH:mm'),
+      };
       if (section === 'sim') return { ICCID: a.sn, Provider: a.provider || '', MSISDN: a.msisdn || '', 'Jenis SIM': a.simType || '', 'SN Perangkat': a.parentDeviceSN || '', ...base };
       if (section === 'peripheral') return { ...base, Jenis: a.peripheralType || '', Merk: a.vendor || '', Model: a.model || '', 'SN Perangkat': a.parentDeviceSN || '' };
       const linked = childrenOf(a.id);
       const contract = contractHealth(a);
       return {
         ...base, Merk: a.vendor || '', Model: a.model || '', TID: a.tid || '', MID: a.mid || '', 'OS Version': a.osVersion || '', Kondisi: a.condition || '', IMEI: a.imei || '',
+        Koneksi: a.connectionType || '',
+        'SIM MSISDN': linked.filter(c => c.assetType === 'sim').map(c => c.msisdn || '').filter(Boolean).join(', '),
+        'SIM Provider': linked.filter(c => c.assetType === 'sim').map(c => c.provider || '').filter(Boolean).join(', '),
+        'Tanggal Pasang': formatDate(a.installedDate, 'yyyy-MM-dd'), 'Kunjungan Terakhir': formatDate(a.lastVisitDate, 'yyyy-MM-dd'),
+        'Teknisi Terakhir': a.lastTechnician || '', 'Jumlah Perbaikan': a.repairCount || 0, 'Total Biaya Perbaikan': a.repairCostTotal || 0,
+        'Sewa / Bulan': a.currentMonthlyRental || '', 'Metode Penghapusan': a.disposalMethod || '', 'Tanggal Penghapusan': formatDate(a.disposalDate, 'yyyy-MM-dd'),
         SIM: linked.filter(c => c.assetType === 'sim').map(c => c.sn).join(', '),
         Peripheral: linked.filter(c => c.assetType === 'peripheral').map(c => `${c.peripheralType} ${c.sn}`).join(', '),
         'Status Kontrak': a.contractStatus || '', 'Akhir Kontrak': contract.effectiveEnd ? formatDate(contract.effectiveEnd, 'yyyy-MM-dd') : '',
@@ -272,6 +315,46 @@ export function EDCList() {
                 </label>
               </>
             )}
+            <label className="space-y-1">
+              <span className="text-[10px] font-bold text-brand-text-muted uppercase tracking-widest">Region</span>
+              <select className={cn(inputClass, 'bg-white py-2 text-xs')} value={filters.region} onChange={setFilter('region')}>
+                <option value="All">Semua region</option>
+                {regions.map(r => <option key={r}>{r}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] font-bold text-brand-text-muted uppercase tracking-widest">Merchant / Lokasi</span>
+              <select className={cn(inputClass, 'bg-white py-2 text-xs')} value={filters.location} onChange={setFilter('location')}>
+                <option value="All">Semua lokasi</option>
+                {locations.filter(l => filters.customer === 'All' || !l.customerId || l.customerId === filters.customer).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] font-bold text-brand-text-muted uppercase tracking-widest">Supplier</span>
+              <select className={cn(inputClass, 'bg-white py-2 text-xs')} value={filters.supplier} onChange={setFilter('supplier')}>
+                <option value="All">Semua supplier</option>
+                {suppliers.map(sp => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] font-bold text-brand-text-muted uppercase tracking-widest">Lama di Status</span>
+              <select className={cn(inputClass, 'bg-white py-2 text-xs')} value={filters.aging} onChange={setFilter('aging')}>
+                <option value="All">Semua</option>
+                <option value="30">≥ 30 hari</option>
+                <option value="90">≥ 90 hari</option>
+                <option value="180">≥ 180 hari</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[10px] font-bold text-brand-text-muted uppercase tracking-widest">Garansi</span>
+              <select className={cn(inputClass, 'bg-white py-2 text-xs')} value={filters.warranty} onChange={setFilter('warranty')}>
+                <option value="All">Semua</option>
+                <option value="active">Masih garansi</option>
+                <option value="expiring">Habis ≤ 30 hari</option>
+                <option value="expired">Sudah habis</option>
+                <option value="none">Tanpa data garansi</option>
+              </select>
+            </label>
             <button onClick={resetFilters} className="text-[11px] font-bold text-brand-primary uppercase hover:underline text-left pb-2.5">Reset filter</button>
           </div>
         )}
@@ -305,6 +388,7 @@ export function EDCList() {
                     </td>
                     <td className="px-4 py-3">
                       <button onClick={() => setDetailId(a.id)} className="font-bold text-brand-text-main hover:text-brand-primary text-left break-all">{a.sn}</button>
+                      {a.assetTag && <span className="block text-[10px] text-brand-text-muted font-bold">Tag {a.assetTag}</span>}
                       {linked > 0 && <span className="block text-[10px] text-brand-text-muted font-bold">+{linked} SIM / peripheral</span>}
                     </td>
                     <td className="px-4 py-3">
@@ -321,6 +405,9 @@ export function EDCList() {
                         <div className="text-[10px] font-bold text-brand-text-muted uppercase space-y-0.5">
                           <span className="flex items-center gap-1"><Hash size={10} /> TID: <span className="text-brand-text-main">{a.tid || '-'}</span></span>
                           <span className="flex items-center gap-1"><Tag size={10} /> MID: <span className="text-brand-text-main">{a.mid || '-'}</span></span>
+                          {childrenOf(a.id).filter(c => c.assetType === 'sim').map(sim => (
+                            <span key={sim.id} className="flex items-center gap-1 normal-case">SIM: <span className="text-brand-text-main">{sim.provider || ''} {sim.msisdn || sim.sn}</span></span>
+                          ))}
                         </div>
                       ) : a.parentDeviceId ? (
                         <button onClick={() => setDetailId(a.parentDeviceId!)} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded border border-indigo-100 flex items-center gap-1 hover:bg-indigo-100">
@@ -337,8 +424,26 @@ export function EDCList() {
                         <span className="font-bold text-brand-text-main">(Gudang)</span>
                       )}
                       <span className="block text-[10px] text-brand-text-muted font-bold">{locationLabel(a)}</span>
+                      {(() => {
+                        const loc = a.currentLocationId ? locationById.get(a.currentLocationId) : undefined;
+                        const place = [loc?.city, loc?.region].filter(Boolean).join(' · ');
+                        return place ? <span className="block text-[10px] text-brand-text-muted">{place}</span> : null;
+                      })()}
                     </td>
-                    <td className="px-4 py-3"><StatusBadge status={a.status} /></td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={a.status} />
+                      {(() => {
+                        const days = daysBetween(a.statusSince || a.updatedAt);
+                        const idle = STOCK_STATUSES.includes(a.status) && (days ?? 0) >= IDLE_STOCK_DAYS;
+                        const w = warrantyState(a);
+                        return (
+                          <>
+                            {days != null && <span className={cn('block text-[10px] font-bold mt-0.5', idle ? 'text-amber-600' : 'text-brand-text-muted')} title="Lama di status ini">{formatDuration(days)}{idle ? ' · menganggur' : ''}</span>}
+                            {(w === 'expired' || w === 'expiring') && <span className={cn('block text-[10px] font-bold', w === 'expired' ? 'text-red-600' : 'text-amber-600')}>Garansi {w === 'expired' ? 'habis' : 's/d'} {formatDate(a.warrantyUntil)}</span>}
+                          </>
+                        );
+                      })()}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1.5">
                         <button onClick={() => setDetailId(a.id)} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-brand-primary text-white text-[10px] font-bold uppercase rounded-lg hover:bg-brand-primary-dark">

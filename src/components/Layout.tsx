@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeftRight, ChevronDown, ChevronRight, Database, KeyRound, LayoutDashboard, LogOut, MapPin, Menu,
-  Settings, ShieldAlert, Smartphone, UserCircle, Users, X,
+  Settings, ShieldAlert, Smartphone, Truck, UserCircle, Users, X,
 } from 'lucide-react';
 import { logout } from '../lib/firebase';
 import { cn } from '../lib/utils';
@@ -28,7 +28,8 @@ const MAIN_MENU: MenuItem[] = [
 
 const MASTER_MENU: MenuItem[] = [
   { id: 'customers', label: 'Customer B2B', icon: Users },
-  { id: 'locations', label: 'Lokasi', icon: MapPin },
+  { id: 'locations', label: 'Merchant & Lokasi', icon: MapPin },
+  { id: 'suppliers', label: 'Supplier & Model', icon: Truck },
   { id: 'parts', label: 'Part EDC', icon: Settings },
 ];
 

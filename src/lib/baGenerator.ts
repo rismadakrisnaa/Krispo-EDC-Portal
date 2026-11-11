@@ -17,6 +17,8 @@ const safeDate = (value: string, pattern: string) => {
 export interface BAData {
   /** Nomor BA tersimpan di log pergerakan, sehingga unduh ulang menghasilkan nomor yang sama. */
   baNumber: string;
+  /** Judul setelah "BERITA ACARA". Default: label tipe pergerakan. */
+  title?: string;
   movementType: string;
   transactionDate: string;
   customerName: string;
@@ -36,7 +38,7 @@ export async function downloadBAPDF(data: BAData) {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const label = movementLabel(data.movementType);
+  const label = data.title || movementLabel(data.movementType);
   const lastY = () => (doc as any).lastAutoTable.finalY as number;
   const ensureSpace = (y: number, needed: number) => {
     if (y + needed <= pageHeight - 20) return y;

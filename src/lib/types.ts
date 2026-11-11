@@ -45,6 +45,29 @@ export interface Asset {
   isTerminatedInARO?: boolean;
   damagedParts?: string[];
   hasBA?: boolean;
+  /** Sejak kapan unit berada di status sekarang (ISO). Dipakai untuk aging. */
+  statusSince?: string;
+  // Pengadaan (penerimaan dari supplier)
+  assetTag?: string;
+  modelId?: string;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  poNumber?: string;
+  deliveryNoteNo?: string;
+  receivedDate?: string;
+  purchasePrice?: number;
+  warrantyUntil?: string;
+  connectionType?: string;
+  // Operasional
+  installedDate?: string;
+  lastVisitDate?: string;
+  lastTechnician?: string;
+  repairCount?: number;
+  repairCostTotal?: number;
+  // Akhir masa pakai
+  disposalMethod?: string;
+  disposalDate?: string;
+  disposalValue?: number;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
   lastUpdatedBy?: string;
@@ -65,12 +88,44 @@ export interface Customer {
   contractDuration?: number;
 }
 
+/** Gudang, service center, atau merchant (outlet milik customer). */
 export interface Location {
   id: string;
   name: string;
   type: LocationType | string;
   address?: string;
+  /** Wajib untuk merchant: customer pemilik outlet. */
   customerId?: string | null;
+  city?: string;
+  province?: string;
+  postalCode?: string;
+  region?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  picName?: string;
+  picPhone?: string;
+  /** Kode outlet dari customer (opsional). */
+  merchantCode?: string;
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  contactName?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  notes?: string;
+}
+
+/** Master brand & tipe perangkat. */
+export interface DeviceModel {
+  id: string;
+  brand: string;
+  model: string;
+  category?: string;
+  warrantyMonths?: number;
+  notes?: string;
 }
 
 export interface Part {
@@ -107,6 +162,21 @@ export interface Movement {
   partPenaltyAmount?: number;
   damagedParts?: string[];
   linkedAssets?: { sn: string; type: string }[];
+  // Data tambahan per tipe pergerakan
+  referenceNo?: string;
+  courier?: string;
+  serviceVendor?: string;
+  cost?: number;
+  conditionAfter?: string;
+  disposalMethod?: string;
+  disposalValue?: number;
+  keyZeroized?: boolean;
+  supplierName?: string;
+  poNumber?: string;
+  /** Swap: SN unit pasangannya. */
+  swapWithSn?: string;
+  tid?: string;
+  mid?: string;
   timestamp?: Timestamp;
   userId?: string;
   userName?: string;
