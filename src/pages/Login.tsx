@@ -19,7 +19,9 @@ export function Login() {
       setError(
         err.code === 'auth/popup-blocked'
           ? 'Popup login diblokir browser. Izinkan popup untuk situs ini lalu coba lagi.'
-          : 'Login gagal. Periksa koneksi internet lalu coba lagi.',
+          : err.code === 'auth/unauthorized-domain'
+            ? `Domain ${window.location.hostname} belum diizinkan. Admin perlu menambahkannya di Firebase Console > Authentication > Settings > Authorized domains.`
+            : 'Login gagal. Periksa koneksi internet lalu coba lagi.',
       );
     } finally {
       setBusy(false);

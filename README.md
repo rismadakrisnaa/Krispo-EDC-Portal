@@ -79,6 +79,15 @@ npm run deploy:rules
 
 `firebase.json` sudah menunjuk ke database Firestore bernama yang dipakai aplikasi.
 
+## Deploy ke Vercel
+
+Project sudah menyertakan `vercel.json` (framework Vite, output `dist`), tanpa environment variable.
+
+1. Di Vercel: **Add New > Project**, pilih repository ini, lalu **Deploy**. Setiap push berikutnya otomatis ter-deploy.
+2. Di Firebase Console: **Authentication > Settings > Authorized domains**, tambahkan domain Vercel-nya
+   (mis. `nama-project.vercel.app`). Tanpa ini login Google ditolak dengan `auth/unauthorized-domain`.
+3. Pastikan security rules sudah ter-deploy (lihat bagian di atas).
+
 ## Test
 
 ```bash
