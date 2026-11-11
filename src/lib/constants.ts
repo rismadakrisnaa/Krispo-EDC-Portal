@@ -4,8 +4,32 @@
  * Matriks hak akses di bawah dicerminkan 1:1 di firestore.rules.
  */
 
-// Admin pertama (bootstrap). Harus sama dengan isBootstrapAdmin() di firestore.rules.
-export const BOOTSTRAP_ADMIN_EMAIL = 'rismadakrisnaa@gmail.com';
+// ---------------------------------------------------------------------------
+// Login username + password
+// ---------------------------------------------------------------------------
+// Firebase Auth butuh format email, jadi username dipetakan ke email internal
+// `username@<domain ini>`. Email ini tidak pernah dikirimi apa pun.
+// Harus sama dengan loginDomain() di firestore.rules.
+export const LOGIN_EMAIL_DOMAIN = 'krispo-edc.local';
+
+// Username admin pertama (bootstrap). Harus sama dengan isBootstrapAdmin() di firestore.rules.
+export const BOOTSTRAP_ADMIN_USERNAME = 'admin';
+
+export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+export const MIN_PASSWORD_LENGTH = 8;
+
+export const normalizeUsername = (value: string) => value.trim().toLowerCase();
+
+/** Input login boleh username biasa, atau email lengkap untuk akun khusus. */
+export const loginEmailFor = (usernameOrEmail: string) => {
+  const value = normalizeUsername(usernameOrEmail);
+  return value.includes('@') ? value : `${value}@${LOGIN_EMAIL_DOMAIN}`;
+};
+
+export const usernameFromEmail = (email?: string | null) =>
+  (email || '').toLowerCase().endsWith(`@${LOGIN_EMAIL_DOMAIN}`) ? (email || '').split('@')[0].toLowerCase() : email || '';
+
+export const BOOTSTRAP_ADMIN_EMAIL = loginEmailFor(BOOTSTRAP_ADMIN_USERNAME);
 
 // ---------------------------------------------------------------------------
 // Status aset
@@ -251,7 +275,7 @@ const PERMISSIONS: Record<Role, Permission[]> = {
 };
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
-  Admin: 'Akses penuh: semua data, hapus data, dan manajemen user.',
+  Admin: 'Akses penuh: semua data, hapus data, dan kelola akun user.',
   Operations: 'Registrasi aset, pergerakan EDC, master customer, lokasi, dan part.',
   Warehouse: 'Registrasi aset, pergerakan EDC, dan master lokasi.',
   Service: 'Update aset, pergerakan (perbaikan/penarikan), dan master part.',

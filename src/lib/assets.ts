@@ -1,5 +1,5 @@
 import { collection, deleteField, doc, serverTimestamp, writeBatch, type WriteBatch } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { actorName, auth, db } from './firebase';
 import { ALL_STATUSES, CONDITIONS, CUSTOMER_STATUSES, INITIAL_STATUSES, PERIPHERAL_TYPES, SIM_TYPES, STATUS, statusMeta, type AssetStatus, type AssetType } from './constants';
 import { cell, type Row } from './excel';
 import { chunk, stripUndefined } from './utils';
@@ -91,7 +91,7 @@ function logInitial(batch: WriteBatch, assetId: string, sn: string, status: stri
   batch.set(doc(collection(db, 'movements')), {
     edcId: assetId, sn, type, toStatus: status, baGenerated: false,
     transactionDate: new Date().toISOString().slice(0, 10),
-    timestamp: serverTimestamp(), userId: user.uid, userName: user.displayName || user.email || 'User',
+    timestamp: serverTimestamp(), userId: user.uid, userName: actorName(),
   });
 }
 

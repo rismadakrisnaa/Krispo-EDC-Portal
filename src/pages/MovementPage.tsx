@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { AlertCircle, ArrowLeftRight, ArrowRight, ClipboardList, FileCheck, History, Search, User, X } from 'lucide-react';
-import { auth, db, describeError } from '../lib/firebase';
+import { db, describeError } from '../lib/firebase';
 import { MOVEMENT_RULES, movementLabel, movementRule, statusMeta, type MovementType } from '../lib/constants';
 import { checkEligibility, executeMovement, redownloadBA, resolveCustomer, terminationFor, withdrawalDateProblem } from '../lib/movements';
 import { cn, formatDate, formatIDR, matchesSearch } from '../lib/utils';
@@ -17,7 +17,7 @@ const today = () => format(new Date(), 'yyyy-MM-dd');
 
 export function MovementPage() {
   const { assets, customers, locations, parts, assetById, customerById, childrenOf } = useData();
-  const { can } = useAuth();
+  const { can, profile } = useAuth();
   const { movementSeed, clearMovementSeed } = useNav();
   const { toast } = useFeedback();
   const canMove = can('movements.create');
@@ -32,7 +32,7 @@ export function MovementPage() {
   const [notes, setNotes] = useState('');
   const [search, setSearch] = useState('');
   const [picName, setPicName] = useState('');
-  const [technicianName, setTechnicianName] = useState(auth.currentUser?.displayName || '');
+  const [technicianName, setTechnicianName] = useState(profile?.displayName || profile?.username || '');
   const [damaged, setDamaged] = useState<Record<string, string[]>>({});
   const [showConfirm, setShowConfirm] = useState(false);
   const [busy, setBusy] = useState(false);

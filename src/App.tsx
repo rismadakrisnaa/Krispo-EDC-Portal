@@ -1,12 +1,14 @@
 import React, { lazy, Suspense } from 'react';
 import { Loader2, ShieldOff } from 'lucide-react';
 import { logout } from './lib/firebase';
+import { usernameFromEmail } from './lib/constants';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider, useData } from './context/DataContext';
 import { NavProvider, useNav } from './context/NavContext';
 import { FeedbackProvider } from './components/ui';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
+import { ChangePasswordForm } from './components/ChangePasswordForm';
 
 // Tiap halaman di-load saat dibuka saja, supaya bundle awal kecil.
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
@@ -36,9 +38,9 @@ function AccessMessage({ title, message }: { title: string; message: string }) {
         </div>
         <h1 className="text-lg font-bold text-brand-text-main mb-2">{title}</h1>
         <p className="text-sm text-brand-text-muted leading-relaxed mb-1">{message}</p>
-        {user?.email && <p className="text-xs font-bold text-brand-text-main mb-6">{user.email}</p>}
+        {user?.email && <p className="text-xs font-bold text-brand-text-main mb-6">{usernameFromEmail(user.email)}</p>}
         <button onClick={logout} className="w-full py-3 bg-brand-text-main text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-black transition-all">
-          Keluar & ganti akun
+          Keluar
         </button>
       </div>
     </div>
@@ -79,13 +81,32 @@ function CurrentPage() {
   );
 }
 
+function ForcePasswordChange() {
+  const { profile } = useAuth();
+  return (
+    <div className="min-h-screen bg-brand-bg flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-white p-8 rounded-2xl border border-brand-border shadow-sm space-y-5">
+        <div>
+          <h1 className="text-lg font-bold text-brand-text-main">Ganti Password</h1>
+          <p className="text-sm text-brand-text-muted mt-1">
+            Halo {profile?.displayName || profile?.username}, akun Anda masih memakai password sementara dari Admin. Buat password baru sebelum melanjutkan.
+          </p>
+        </div>
+        {/* Profil live dari AuthContext otomatis membuka aplikasi setelah tersimpan. */}
+        <ChangePasswordForm onDone={() => {}} />
+        <button onClick={logout} className="w-full text-[11px] font-bold text-brand-text-muted hover:text-red-600">Keluar</button>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
-  const { state } = useAuth();
+  const { state, profile } = useAuth();
 
   if (state === 'loading') return <FullScreenLoader />;
   if (state === 'signed-out') return <Login />;
   if (state === 'no-access') {
-    return <AccessMessage title="Akun belum terdaftar" message="Login berhasil, tetapi akun ini belum diberi akses. Minta Admin menambahkan email Anda di menu User & Role, lalu login ulang." />;
+    return <AccessMessage title="Akun belum terdaftar" message="Login berhasil, tetapi akun ini belum diberi akses. Minta Admin membuatkan akun Anda di menu User & Role." />;
   }
   if (state === 'inactive') {
     return <AccessMessage title="Akun dinonaktifkan" message="Akses akun ini sudah dinonaktifkan oleh Admin." />;
@@ -93,6 +114,8 @@ function Shell() {
   if (state === 'error') {
     return <AccessMessage title="Gagal memuat akses" message="Terjadi masalah saat memeriksa hak akses. Periksa koneksi internet lalu coba login ulang." />;
   }
+
+  if (profile?.mustChangePassword) return <ForcePasswordChange />;
 
   return (
     <DataProvider>

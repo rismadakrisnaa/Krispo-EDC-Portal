@@ -1,7 +1,7 @@
 import {
   collection, deleteField, doc, getDocs, query, serverTimestamp, where, writeBatch, type FieldValue,
 } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { actorName, auth, db } from './firebase';
 import { ALL_STATUSES, CONTRACT_STATUS, STATUS, movementRule, statusMeta, type AssetStatus, type MovementRule, type MovementType } from './constants';
 import { buildInstallContract, calcTermination } from './contract';
 import { downloadBAPDF, type BAData } from './baGenerator';
@@ -226,7 +226,7 @@ export async function executeMovement(req: MovementRequest, lookup: Lookup): Pro
         ...log,
         timestamp: serverTimestamp(),
         userId: user.uid,
-        userName: user.displayName || user.email || 'User',
+        userName: actorName(),
       });
       ops += units[i].ops;
       inBatch++;
@@ -381,7 +381,7 @@ export async function cancelTermination(assets: Asset[], lookup: Lookup): Promis
         baGenerated: false,
         timestamp: serverTimestamp(),
         userId: user.uid,
-        userName: user.displayName || user.email || 'User',
+        userName: actorName(),
       });
       ops += 2 + children.length;
       inBatch++;

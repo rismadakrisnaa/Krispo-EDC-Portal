@@ -9,8 +9,11 @@ import { deleteDoc, doc, getDoc, getDocs, collection, serverTimestamp, setDoc, u
 
 let env: RulesTestEnvironment;
 
-const asUser = (uid: string, email: string, verified = true) =>
-  env.authenticatedContext(uid, { email, email_verified: verified }).firestore();
+const D = '@krispo-edc.local';
+// Akun username/password: email internal, tidak pernah terverifikasi.
+const asUser = (uid: string, email: string) => env.authenticatedContext(uid, { email, email_verified: false }).firestore();
+const profile = (username: string, role: string, extra: Record<string, unknown> = {}) =>
+  ({ email: username + D, username, displayName: username, role, status: 'Active', mustChangePassword: true, ...extra });
 
 const asset = (extra: Record<string, unknown> = {}) => ({ sn: 'SN-1', assetType: 'perangkat', status: 'Available in Warehouse', ...extra });
 const movement = (uid: string, extra: Record<string, unknown> = {}) => ({
@@ -30,17 +33,16 @@ beforeEach(async () => {
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async ctx => {
     const db = ctx.firestore();
-    const profile = (email: string, role: string, status = 'Active') => ({ email, role, status });
-    await setDoc(doc(db, 'users/admin'), profile('admin@x.co', 'Admin'));
-    await setDoc(doc(db, 'users/ops'), profile('ops@x.co', 'Operations'));
-    await setDoc(doc(db, 'users/wh'), profile('wh@x.co', 'Warehouse'));
-    await setDoc(doc(db, 'users/svc'), profile('svc@x.co', 'Service'));
-    await setDoc(doc(db, 'users/am'), profile('am@x.co', 'Account Manager'));
-    await setDoc(doc(db, 'users/mgmt'), profile('mgmt@x.co', 'Management'));
-    await setDoc(doc(db, 'users/off'), profile('off@x.co', 'Operations', 'Inactive'));
+    const p = (email: string, role: string, status = 'Active') => ({ email, role, status });
+    await setDoc(doc(db, 'users/admin'), p('admin@x.co', 'Admin'));
+    await setDoc(doc(db, 'users/ops'), p('ops@x.co', 'Operations'));
+    await setDoc(doc(db, 'users/wh'), p('wh@x.co', 'Warehouse'));
+    await setDoc(doc(db, 'users/svc'), p('svc@x.co', 'Service'));
+    await setDoc(doc(db, 'users/am'), p('am@x.co', 'Account Manager'));
+    await setDoc(doc(db, 'users/mgmt'), { ...p('mgmt' + D, 'Management'), username: 'mgmt' });
+    await setDoc(doc(db, 'users/off'), p('off@x.co', 'Operations', 'Inactive'));
     // profil lama tanpa field status tetap dianggap aktif
     await setDoc(doc(db, 'users/legacy'), { email: 'legacy@x.co', role: 'Operations' });
-    await setDoc(doc(db, 'invites/baru@x.co'), { email: 'baru@x.co', role: 'Warehouse' });
     await setDoc(doc(db, 'edcs/e1'), asset());
     await setDoc(doc(db, 'customers/c1'), { name: 'PT A', email: 'a@a.co', value: 1000 });
     await setDoc(doc(db, 'edc_parts/p1'), { name: 'Charger', price: 50000 });
@@ -56,8 +58,8 @@ describe('akses dasar', () => {
     await assertFails(getDocs(collection(db, 'customers')));
   });
 
-  it('akun Google yang tidak terdaftar: tidak bisa baca / tulis apa pun', async () => {
-    const db = asUser('stranger', 'orang@luar.com');
+  it('akun login tanpa profil (mis. daftar sendiri lewat API): tidak bisa baca / tulis apa pun', async () => {
+    const db = asUser('stranger', 'orang' + D);
     await assertFails(getDoc(doc(db, 'edcs/e1')));
     await assertFails(getDocs(collection(db, 'movements')));
     await assertFails(setDoc(doc(db, 'edcs/x'), asset()));
@@ -82,47 +84,44 @@ describe('akses dasar', () => {
 });
 
 describe('users & role', () => {
-  it('user tidak bisa mengangkat dirinya jadi Admin saat daftar', async () => {
-    const db = asUser('stranger', 'orang@luar.com');
-    for (const role of ['Admin', 'Management', 'Operations', 'User']) {
-      await assertFails(setDoc(doc(db, 'users/stranger'), { email: 'orang@luar.com', role, status: 'Active' }));
+  it('user tidak bisa membuat profilnya sendiri (role apa pun)', async () => {
+    const db = asUser('stranger', 'orang' + D);
+    for (const role of ['Admin', 'Management', 'Operations']) {
+      await assertFails(setDoc(doc(db, 'users/stranger'), profile('orang', role)));
     }
   });
 
-  it('user yang diundang hanya bisa klaim role sesuai undangan', async () => {
-    const db = asUser('newbie', 'baru@x.co');
-    await assertFails(setDoc(doc(db, 'users/newbie'), { email: 'baru@x.co', role: 'Admin', status: 'Active' }));
-    await assertFails(setDoc(doc(db, 'users/newbie'), { email: 'lain@x.co', role: 'Warehouse', status: 'Active' }));
-    await assertFails(setDoc(doc(db, 'users/newbie'), { email: 'baru@x.co', role: 'Warehouse', status: 'Active', isVerified: true }));
-    await assertFails(setDoc(doc(db, 'users/orang-lain'), { email: 'baru@x.co', role: 'Warehouse', status: 'Active' }));
-
-    const batch = writeBatch(db);
-    batch.set(doc(db, 'users/newbie'), { email: 'baru@x.co', displayName: 'Baru', role: 'Warehouse', status: 'Active', createdAt: serverTimestamp() });
-    batch.delete(doc(db, 'invites/baru@x.co'));
-    await assertSucceeds(batch.commit());
-    await assertSucceeds(getDoc(doc(db, 'edcs/e1')));
+  it('admin pertama hanya bisa membuat profil Admin untuk dirinya sendiri', async () => {
+    const db = asUser('boss', 'admin' + D);
+    await assertFails(setDoc(doc(db, 'users/boss'), profile('admin', 'Operations')));
+    await assertFails(setDoc(doc(db, 'users/boss'), profile('admin', 'Admin', { isVerified: true })));
+    await assertSucceeds(setDoc(doc(db, 'users/boss'), profile('admin', 'Admin', { mustChangePassword: false })));
+    // akun lain yang mengaku 'admin' lewat username di dokumen tetap ditolak
+    await assertFails(setDoc(doc(asUser('fake', 'palsu' + D), 'users/fake'), profile('admin', 'Admin')));
   });
 
-  it('email belum terverifikasi tidak bisa klaim undangan', async () => {
-    const db = asUser('newbie', 'baru@x.co', false);
-    await assertFails(setDoc(doc(db, 'users/newbie'), { email: 'baru@x.co', role: 'Warehouse', status: 'Active' }));
+  it('admin membuat akun user lain, dengan validasi', async () => {
+    const db = asUser('admin', 'admin@x.co');
+    await assertSucceeds(setDoc(doc(db, 'users/u1'), profile('budi.s', 'Warehouse')));
+    await assertFails(setDoc(doc(db, 'users/u2'), profile('budi', 'Dewa')));
+    await assertFails(setDoc(doc(db, 'users/u3'), profile('Budi Besar', 'Warehouse')));
+    await assertFails(setDoc(doc(db, 'users/u4'), { ...profile('budi4', 'Warehouse'), email: 'lain' + D }));
+    await assertFails(setDoc(doc(db, 'users/u5'), profile('budi5', 'Warehouse', { status: 'Inactive' })));
+    await assertFails(setDoc(doc(db, 'users/admin'), profile('admin2', 'Admin')));
+    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'users/u6'), profile('budi6', 'Operations')));
   });
 
-  it('bootstrap admin bisa membuat profil Admin-nya sendiri, bukan role lain', async () => {
-    const db = asUser('boss', 'rismadakrisnaa@gmail.com');
-    await assertFails(setDoc(doc(db, 'users/boss'), { email: 'rismadakrisnaa@gmail.com', role: 'Operations', status: 'Active' }));
-    await assertSucceeds(setDoc(doc(db, 'users/boss'), { email: 'rismadakrisnaa@gmail.com', role: 'Admin', status: 'Active' }));
-    await assertFails(setDoc(doc(asUser('fake', 'rismadakrisnaa@gmail.com', false), 'users/fake'), { email: 'rismadakrisnaa@gmail.com', role: 'Admin', status: 'Active' }));
-  });
-
-  it('user tidak bisa menaikkan role-nya sendiri', async () => {
-    const db = asUser('mgmt', 'mgmt@x.co');
+  it('user tidak bisa menaikkan role / mengaktifkan dirinya sendiri', async () => {
+    const db = asUser('mgmt', 'mgmt' + D);
     await assertFails(updateDoc(doc(db, 'users/mgmt'), { role: 'Admin' }));
     await assertFails(updateDoc(doc(db, 'users/mgmt'), { status: 'Active', role: 'Operations' }));
-    await assertSucceeds(updateDoc(doc(db, 'users/mgmt'), { displayName: 'Nama Baru' }));
+    await assertFails(updateDoc(doc(db, 'users/mgmt'), { username: 'boss' }));
+    await assertFails(updateDoc(doc(db, 'users/mgmt'), { mustChangePassword: true }));
+    await assertSucceeds(updateDoc(doc(db, 'users/mgmt'), { displayName: 'Nama Baru', mustChangePassword: false }));
+    await assertFails(updateDoc(doc(asUser('off', 'off@x.co'), 'users/off'), { status: 'Active' }));
   });
 
-  it('daftar user hanya untuk Admin (cegah kebocoran PII)', async () => {
+  it('daftar user hanya untuk Admin (cegah kebocoran data)', async () => {
     await assertFails(getDocs(collection(asUser('ops', 'ops@x.co'), 'users')));
     await assertFails(getDoc(doc(asUser('ops', 'ops@x.co'), 'users/admin')));
     await assertSucceeds(getDoc(doc(asUser('ops', 'ops@x.co'), 'users/ops')));
@@ -132,22 +131,17 @@ describe('users & role', () => {
   it('admin mengelola user lain tapi tidak bisa mengubah / menghapus dirinya sendiri', async () => {
     const db = asUser('admin', 'admin@x.co');
     await assertSucceeds(updateDoc(doc(db, 'users/ops'), { role: 'Service', status: 'Active' }));
-    await assertSucceeds(updateDoc(doc(db, 'users/ops'), { status: 'Inactive' }));
+    await assertSucceeds(updateDoc(doc(db, 'users/ops'), { status: 'Inactive', displayName: 'Ops' }));
     await assertFails(updateDoc(doc(db, 'users/ops'), { role: 'Dewa', status: 'Active' }));
+    await assertFails(updateDoc(doc(db, 'users/ops'), { email: 'baru@x.co' }));
+    await assertFails(updateDoc(doc(db, 'users/mgmt'), { username: 'lain' }));
     await assertFails(updateDoc(doc(db, 'users/admin'), { role: 'Management', status: 'Active' }));
     await assertFails(deleteDoc(doc(db, 'users/admin')));
     await assertSucceeds(deleteDoc(doc(db, 'users/mgmt')));
   });
 
-  it('undangan hanya dikelola Admin', async () => {
-    const admin = asUser('admin', 'admin@x.co');
-    await assertSucceeds(setDoc(doc(admin, 'invites/x@x.co'), { email: 'x@x.co', role: 'Service' }));
-    await assertFails(setDoc(doc(admin, 'invites/X@x.co'), { email: 'X@x.co', role: 'Service' }));
-    await assertFails(setDoc(doc(admin, 'invites/y@x.co'), { email: 'y@x.co', role: 'Dewa' }));
-    await assertFails(setDoc(doc(asUser('ops', 'ops@x.co'), 'invites/z@x.co'), { email: 'z@x.co', role: 'Admin' }));
-    await assertFails(getDoc(doc(asUser('ops', 'ops@x.co'), 'invites/baru@x.co')));
-    await assertFails(getDocs(collection(asUser('ops', 'ops@x.co'), 'invites')));
-    await assertSucceeds(getDoc(doc(asUser('newbie', 'baru@x.co'), 'invites/baru@x.co')));
+  it('koleksi undangan lama sudah tidak bisa diakses', async () => {
+    await assertFails(setDoc(doc(asUser('admin', 'admin@x.co'), 'invites/x@x.co'), { email: 'x@x.co', role: 'Admin' }));
   });
 });
 

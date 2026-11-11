@@ -3,7 +3,7 @@
 Aplikasi web untuk mengelola siklus hidup aset channel (perangkat EDC, SIM card, peripheral):
 registrasi, alokasi ke customer B2B, pemasangan, penarikan, kontrak sewa per unit, denda, dan Berita Acara (PDF).
 
-Stack: React 19, Vite, Tailwind CSS 4, Firebase Auth (Google) dan Cloud Firestore.
+Stack: React 19, Vite, Tailwind CSS 4, Firebase Auth (username + password) dan Cloud Firestore.
 
 ## Menu
 
@@ -14,15 +14,24 @@ Stack: React 19, Vite, Tailwind CSS 4, Firebase Auth (Google) dan Cloud Firestor
 | Pergerakan EDC | Satu-satunya tempat status unit berubah: alokasi, kirim, pasang, relokasi, tarik, perbaikan, kembali ke stok, write-off. |
 | Monitoring Kontrak | Kontrak per unit, ARO, kontrak yang segera berakhir, denda, pembatalan pengakhiran. |
 | Master Data | Customer B2B, Lokasi, Part EDC. |
-| User & Role | Khusus Admin: undang user, atur role, nonaktifkan akun. |
+| User & Role | Khusus Admin: buat akun user, atur role, nonaktifkan akun. |
 
 ## Akses & role
 
-Login Google saja tidak cukup. Hanya email yang **diundang Admin** di menu User & Role yang bisa masuk.
-Admin pertama (bootstrap) ditentukan di dua tempat yang harus sama:
+Login memakai **username + password** (Firebase Authentication, provider Email/Password).
+Username dipetakan ke email internal `username@krispo-edc.local` yang tidak pernah dikirimi apa pun.
 
-- `BOOTSTRAP_ADMIN_EMAIL` di `src/lib/constants.ts`
-- `isBootstrapAdmin()` di `firestore.rules`
+- **Admin pertama**: buka halaman login, klik **Setup admin pertama**, lalu buat password untuk username `admin`.
+  Ini hanya bisa dilakukan sekali; setelah itu username `admin` sudah terpakai.
+- **User lain**: dibuat Admin di menu **User & Role** dengan password sementara. User wajib menggantinya saat login pertama.
+- **Ganti password**: tombol **Ganti Password** di sidebar.
+- **Lupa password**: Admin menonaktifkan akun lama dan membuatkan akun baru. Reset password oleh Admin butuh server
+  (Firebase Admin SDK) dan belum tersedia.
+
+Username admin pertama dan domain login didefinisikan di dua tempat yang harus sama:
+
+- `BOOTSTRAP_ADMIN_USERNAME` dan `LOGIN_EMAIL_DOMAIN` di `src/lib/constants.ts`
+- `isBootstrapAdmin()` dan `loginEmail()` di `firestore.rules`
 
 | Role | Hak tulis |
 | --- | --- |
@@ -62,11 +71,11 @@ npm run emulators
 npm run dev:emulator
 ```
 
-Di mode emulator, login tanpa popup lewat console browser: `__devSignIn('email@contoh.com')`.
+Di mode emulator, buat admin lewat tombol **Setup admin pertama** di halaman login seperti biasa.
 
 ## Deploy security rules (wajib setelah menarik perubahan ini)
 
-Aturan akses ada di `firestore.rules`. Aplikasi versi ini **membutuhkan** rules versi ini (misalnya koleksi `invites`).
+Aturan akses ada di `firestore.rules`. Aplikasi versi ini **membutuhkan** rules versi ini (misalnya aturan pembuatan akun oleh Admin).
 Deploy rules lebih dulu, baru deploy aplikasinya.
 
 ```bash
@@ -82,11 +91,16 @@ npm run deploy:rules
 ## Deploy ke Vercel
 
 Project sudah menyertakan `vercel.json` (framework Vite, output `dist`), tanpa environment variable.
+Setiap push ke branch `main` otomatis ter-deploy.
 
-1. Di Vercel: **Add New > Project**, pilih repository ini, lalu **Deploy**. Setiap push berikutnya otomatis ter-deploy.
-2. Di Firebase Console: **Authentication > Settings > Authorized domains**, tambahkan domain Vercel-nya
-   (mis. `nama-project.vercel.app`). Tanpa ini login Google ditolak dengan `auth/unauthorized-domain`.
-3. Pastikan security rules sudah ter-deploy (lihat bagian di atas).
+Setup sekali di Firebase Console (project `edc-warehouse-management`):
+
+1. **Authentication > Sign-in method**: aktifkan provider **Email/Password** (yang "Email link" tidak perlu).
+   Provider Google boleh dinonaktifkan.
+2. Deploy security rules (bagian di atas).
+3. Buka aplikasi, klik **Setup admin pertama**, buat password admin. Lakukan segera setelah deploy.
+
+Login username + password tidak membutuhkan pendaftaran domain di *Authorized domains*.
 
 ## Test
 
@@ -117,7 +131,7 @@ src/
     baGenerator.ts  PDF Berita Acara & laporan aset
     excel.ts        baca / tulis Excel
   context/
-    AuthContext     sesi, profil, role (klaim undangan saat login pertama)
+    AuthContext     sesi, profil, role, wajib ganti password sementara
     DataContext     satu listener data untuk semua halaman
     NavContext      routing berbasis hash (refresh & tombol back tetap di halaman yang sama)
   components/ui.tsx Modal, toast, dialog konfirmasi, badge status, dsb.

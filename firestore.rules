@@ -4,9 +4,9 @@ rules_version = '2';
 // Channel Inventory Management - Firestore Security Rules
 //
 // Prinsip:
-//  1. Login Google saja TIDAK cukup. User harus punya profil aktif di
-//     /users/{uid}, yang hanya bisa dibuat lewat undangan Admin
-//     (/invites/{email}) atau oleh bootstrap admin.
+//  1. Login (username + password) saja TIDAK cukup. User harus punya profil
+//     aktif di /users/{uid}, yang hanya bisa dibuat oleh Admin (atau oleh
+//     admin pertama untuk dirinya sendiri, sekali saja).
 //  2. Role TIDAK PERNAH bisa ditentukan sendiri oleh user.
 //  3. Matriks hak akses di sini harus sama dengan src/lib/constants.ts.
 //  4. Log pergerakan (movements) tidak bisa diubah setelah dibuat.
@@ -23,13 +23,18 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    function isVerified() {
-      return isSignedIn() && request.auth.token.email != null && request.auth.token.email_verified == true;
+    // Username dipetakan ke email internal username@<domain>.
+    // Harus sama dengan LOGIN_EMAIL_DOMAIN di src/lib/constants.ts.
+    function loginEmail(username) {
+      return username + '@krispo-edc.local';
     }
 
-    // Admin pertama. Harus sama dengan BOOTSTRAP_ADMIN_EMAIL di src/lib/constants.ts.
+    // Admin pertama: akun dengan username 'admin'. Akun ini dibuat sekali lewat
+    // tombol "Setup admin pertama" di halaman login; setelah ada, username itu
+    // tidak bisa didaftarkan siapa pun lagi.
+    // Harus sama dengan BOOTSTRAP_ADMIN_USERNAME di src/lib/constants.ts.
     function isBootstrapAdmin() {
-      return isVerified() && myEmail() == 'rismadakrisnaa@gmail.com';
+      return isSignedIn() && request.auth.token.email != null && myEmail() == loginEmail('admin');
     }
 
     function myProfilePath() {
@@ -126,50 +131,48 @@ service cloud.firestore {
     }
 
     // ---------------- Users ----------------
+    function isValidUsername(username) {
+      return username is string && username.matches('^[a-z0-9][a-z0-9._-]{2,31}$');
+    }
+
+    function isValidNewProfile(data) {
+      return data.keys().hasOnly(['email', 'username', 'displayName', 'role', 'status', 'mustChangePassword', 'createdAt', 'updatedAt']) &&
+             isValidUsername(data.username) &&
+             data.email == loginEmail(data.username) &&
+             isValidRole(data.role) &&
+             data.status == 'Active' &&
+             (!('mustChangePassword' in data) || data.mustChangePassword is bool) &&
+             optString(data, 'displayName', 200);
+    }
+
     match /users/{userId} {
       // Profil sendiri (dipakai saat login) atau Admin. User biasa tidak bisa melihat daftar user.
       allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow list: if isAdmin();
 
-      // Profil hanya bisa dibuat oleh pemilik akun, dengan role yang SUDAH ditentukan:
-      //  - bootstrap admin -> 'Admin'
-      //  - user lain       -> role dari undangan /invites/{email}
-      allow create: if isVerified() && request.auth.uid == userId &&
-                    incoming().keys().hasOnly(['email', 'displayName', 'role', 'status', 'createdAt', 'updatedAt']) &&
-                    incoming().email == myEmail() &&
-                    incoming().status == 'Active' &&
-                    optString(incoming(), 'displayName', 200) &&
-                    (
-                      (isBootstrapAdmin() && incoming().role == 'Admin') ||
-                      (exists(/databases/$(database)/documents/invites/$(myEmail())) &&
-                       incoming().role == get(/databases/$(database)/documents/invites/$(myEmail())).data.role)
+      // Admin membuat profil untuk akun user lain; admin pertama membuat profil Admin untuk dirinya.
+      allow create: if isValidNewProfile(incoming()) && (
+                      (isAdmin() && request.auth.uid != userId) ||
+                      (isBootstrapAdmin() && request.auth.uid == userId &&
+                       incoming().role == 'Admin' && incoming().email == myEmail())
                     );
 
-      // Admin boleh ubah role/status user LAIN. Role & status diri sendiri tidak bisa diubah
-      // (mencegah admin terakhir mengunci dirinya sendiri, dan mencegah eskalasi role).
-      allow update: if incoming().email == existing().email && (
+      // Admin boleh ubah nama, role, dan status user LAIN. Role & status diri sendiri tidak bisa
+      // diubah (mencegah eskalasi role dan mencegah admin terakhir mengunci dirinya sendiri).
+      // User boleh mengubah namanya dan menandai password sementara sudah diganti.
+      allow update: if incoming().email == existing().email &&
+                    incoming().get('username', null) == existing().get('username', null) && (
                       (isAdmin() && request.auth.uid != userId &&
-                       isValidRole(incoming().role) && incoming().status in ['Active', 'Inactive']) ||
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'status', 'updatedAt']) &&
+                       isValidRole(incoming().role) && incoming().status in ['Active', 'Inactive'] &&
+                       optString(incoming(), 'displayName', 200)) ||
                       (request.auth.uid == userId &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'mustChangePassword', 'updatedAt']) &&
+                       incoming().get('mustChangePassword', false) == false &&
                        optString(incoming(), 'displayName', 200))
                     );
 
       allow delete: if isAdmin() && request.auth.uid != userId;
-    }
-
-    // ---------------- Invites (pra-registrasi user oleh Admin) ----------------
-    // ID dokumen = email (huruf kecil).
-    match /invites/{email} {
-      allow get: if isAdmin() || (isVerified() && myEmail() == email);
-      allow list: if isAdmin();
-      allow create, update: if isAdmin() &&
-                            incoming().keys().hasOnly(['email', 'displayName', 'role', 'createdAt', 'createdBy']) &&
-                            incoming().email == email && email == email.lower() && email.size() <= 128 &&
-                            isValidRole(incoming().role) &&
-                            optString(incoming(), 'displayName', 200);
-      // Admin boleh membatalkan; pemilik email menghapus undangannya saat klaim akun.
-      allow delete: if isAdmin() || (isVerified() && myEmail() == email);
     }
 
     // ---------------- Aset (perangkat, SIM, peripheral) ----------------

@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Info, RefreshCw, X, XCircle } from 'lucide-react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 import { cn } from '../lib/utils';
 import { statusMeta } from '../lib/constants';
 
@@ -16,13 +18,17 @@ export const btnSecondary =
 export const btnDanger =
   'px-4 py-2 bg-red-50 text-red-600 border border-red-100 rounded-lg text-sm font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2 disabled:opacity-50';
 
-export function Field({ label, hint, className, children }: { label: string; hint?: string; className?: string; children: React.ReactNode }) {
+const FORM_CONTROLS = new Set(['input', 'select', 'textarea']);
+
+export function Field({ label, hint, className, id: givenId, children }: { label: string; hint?: string; className?: string; id?: string; children: React.ReactNode }) {
   // Label dihubungkan ke input lewat id (bukan dibungkus), supaya nama aksesibel field
   // hanya teks labelnya, tidak tercampur isi <select> atau teks bantuan.
-  const id = useId();
-  let linked = false;
+  // Jika input dibungkus elemen lain, berikan `id` yang sama ke Field dan ke input-nya.
+  const autoId = useId();
+  const id = givenId || autoId;
+  let linked = !!givenId;
   const content = React.Children.map(children, child => {
-    if (linked || !React.isValidElement<{ id?: string }>(child) || child.type === 'datalist') return child;
+    if (linked || !React.isValidElement<{ id?: string }>(child) || !FORM_CONTROLS.has(child.type as string)) return child;
     linked = true;
     return child.props.id ? child : React.cloneElement(child, { id });
   });
@@ -129,6 +135,16 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
   const nextId = useRef(1);
 
   const dismiss = useCallback((id: number) => setToasts(list => list.filter(t => t.id !== id)), []);
+
+  // Notifikasi milik satu sesi tidak boleh terlihat oleh akun berikutnya.
+  useEffect(() => {
+    let lastUid: string | null | undefined;
+    return onAuthStateChanged(auth, user => {
+      const uid = user?.uid ?? null;
+      if (lastUid !== undefined && uid !== lastUid) setToasts([]);
+      lastUid = uid;
+    });
+  }, []);
 
   const toast = useCallback((message: string, kind: ToastKind = 'success') => {
     const id = nextId.current++;

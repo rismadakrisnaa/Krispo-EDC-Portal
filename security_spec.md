@@ -6,7 +6,9 @@ Semua aturan di dokumen ini ditegakkan oleh `firestore.rules` dan diuji otomatis
 ## 1. Invarian data
 
 - Hanya user dengan profil aktif di `/users/{uid}` yang bisa membaca atau menulis data apa pun.
-- Profil hanya bisa dibuat oleh pemilik akun, dengan role dari undangan Admin (`/invites/{email}`) atau `Admin` untuk bootstrap admin. Email harus terverifikasi.
+- Login memakai username + password. Profil user hanya bisa dibuat oleh Admin; satu-satunya pengecualian adalah admin pertama (username `admin`) yang membuat profil Admin untuk dirinya sendiri.
+- Akun yang mendaftar sendiri lewat API Firebase tidak punya profil, sehingga tidak bisa membaca atau menulis apa pun.
+- Username harus unik (dijamin Firebase Auth), sesuai pola `^[a-z0-9][a-z0-9._-]{2,31}$`, dan tidak bisa diubah.
 - Role dan status diri sendiri tidak bisa diubah. Admin tidak bisa mengubah atau menghapus dirinya sendiri (mencegah lockout).
 - Serial number aset tidak bisa diganti setelah terdaftar. Status harus salah satu dari daftar resmi.
 - Nilai uang (denda, sewa, harga part) harus angka dan tidak boleh negatif.
@@ -18,7 +20,7 @@ Semua aturan di dokumen ini ditegakkan oleh `firestore.rules` dan diuji otomatis
 | # | Skenario | Status |
 | --- | --- | --- |
 | 1 | Identity spoofing: membuat profil sendiri dengan `role: "Admin"` | Ditolak rules, teruji |
-| 2 | Akun Google mana pun login lalu otomatis dapat akses | Ditolak: wajib undangan, teruji |
+| 2 | Daftar akun sendiri lewat API Firebase lalu dapat akses | Ditolak: profil hanya dibuat Admin, teruji |
 | 3 | Eskalasi role: user mengubah role-nya sendiri | Ditolak rules, teruji |
 | 4 | Shadow field: menyisipkan field tak dikenal di profil (`isVerified: true`) | Ditolak (`hasOnly`), teruji |
 | 5 | Kebocoran PII: user biasa membaca daftar `/users` | Ditolak, hanya Admin, teruji |
@@ -40,6 +42,11 @@ Aplikasi ini tanpa backend, sehingga logika bisnis berjalan di browser user yang
   termasuk status dan field kontrak, dengan memanggil Firestore langsung. Rules membatasi **siapa** dan **bentuk data**,
   bukan kebenaran hitungan kontrak. Aplikasi sendiri selalu menulis perubahan status bersama log-nya dalam satu batch atomik.
 - Keunikan serial number tidak dijamin database (dicek di aplikasi).
+- **Setup admin pertama**: siapa pun yang lebih dulu mendaftarkan username `admin` menjadi Admin. Lakukan setup segera setelah
+  aplikasi pertama kali di-deploy. Setelah akun `admin` ada, username itu tidak bisa didaftarkan lagi.
+- Pendaftaran akun lewat API Firebase tetap terbuka (dibutuhkan Admin untuk membuat akun dari browser). Akun seperti itu tidak
+  punya akses data, tapi tetap tercatat di daftar Authentication.
+- Reset password oleh Admin belum ada; butuh server dengan Firebase Admin SDK (mis. Vercel Function).
 - Perbaikan menyeluruh untuk dua poin di atas adalah memindahkan pergerakan dan registrasi aset ke Cloud Functions
   (rules lalu menolak semua tulis status dari client).
 
@@ -47,4 +54,5 @@ Aplikasi ini tanpa backend, sehingga logika bisnis berjalan di browser user yang
 
 - Batasi API key Firebase ke domain aplikasi dan aktifkan App Check.
 - Aktifkan backup terjadwal Firestore (PITR / scheduled backups); fitur "Reset Data Operasional" tidak bisa dibatalkan.
-- Review daftar user dan undangan secara berkala; nonaktifkan akun yang tidak dipakai.
+- Review daftar user secara berkala; nonaktifkan akun yang tidak dipakai.
+- Aktifkan *Email enumeration protection* di Firebase Console > Authentication > Settings.

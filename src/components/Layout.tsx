@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ArrowLeftRight, ChevronDown, ChevronRight, Database, LayoutDashboard, LogOut, MapPin, Menu,
+  ArrowLeftRight, ChevronDown, ChevronRight, Database, KeyRound, LayoutDashboard, LogOut, MapPin, Menu,
   Settings, ShieldAlert, Smartphone, UserCircle, Users, X,
 } from 'lucide-react';
 import { logout } from '../lib/firebase';
 import { cn } from '../lib/utils';
 import { useAuth } from '../context/AuthContext';
 import { useNav, type Page } from '../context/NavContext';
+import { usernameFromEmail } from '../lib/constants';
+import { ChangePasswordForm } from './ChangePasswordForm';
+import { Modal, useFeedback } from './ui';
 
 interface MenuItem {
   id: Page;
@@ -43,13 +46,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isMasterPage = MASTER_MENU.some(m => m.id === page);
   const [masterOpen, setMasterOpen] = useState(isMasterPage);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const { toast } = useFeedback();
 
   useEffect(() => {
     if (isMasterPage) setMasterOpen(true);
     setDrawerOpen(false);
   }, [page, isMasterPage]);
 
-  const displayName = profile?.displayName || user?.displayName || user?.email || 'User';
+  const username = profile?.username || usernameFromEmail(user?.email);
+  const displayName = profile?.displayName || username || 'User';
   const initials = displayName.split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
 
   const renderItem = (item: MenuItem, nested = false) => (
@@ -114,9 +120,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
           )}
           <div className="min-w-0">
             <p className="text-sm font-bold text-brand-text-main truncate">{displayName}</p>
-            <p className="text-[10px] font-black text-brand-primary uppercase tracking-widest">{role}</p>
+            <p className="text-[10px] font-bold text-brand-text-muted truncate">@{username} · <span className="font-black text-brand-primary uppercase tracking-widest">{role}</span></p>
           </div>
         </div>
+        <button
+          onClick={() => { setDrawerOpen(false); setShowPassword(true); }}
+          className="w-full flex items-center justify-center gap-2 py-2 px-4 mb-2 bg-gray-50 text-brand-text-muted border border-brand-border rounded-xl text-[11px] font-bold hover:text-brand-text-main hover:bg-gray-100 transition-all"
+        >
+          <KeyRound size={14} />
+          Ganti Password
+        </button>
         <button
           onClick={logout}
           className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-red-50 text-red-600 rounded-xl text-xs font-black uppercase tracking-[0.15em] hover:bg-red-600 hover:text-white transition-all"
@@ -138,6 +151,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <aside className="relative w-[270px] max-w-[85vw] bg-brand-sidebar flex flex-col py-6 shadow-2xl">{sidebar}</aside>
         </div>
       )}
+
+      <Modal open={showPassword} onClose={() => setShowPassword(false)} title="Ganti Password" subtitle={`@${username}`} size="sm">
+        <div className="p-6">
+          <ChangePasswordForm onCancel={() => setShowPassword(false)} onDone={() => { setShowPassword(false); toast('Password berhasil diganti.'); }} />
+        </div>
+      </Modal>
 
       <div className="flex-1 flex flex-col min-w-0">
         <div className="lg:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-brand-border">

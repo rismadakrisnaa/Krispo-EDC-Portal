@@ -1,14 +1,14 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, serverTimestamp, writeBatch } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
-import { BOOTSTRAP_ADMIN_EMAIL, can, type Permission } from '../lib/constants';
+import { doc, getDoc, onSnapshot, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db, setActorName } from '../lib/firebase';
+import { BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_USERNAME, can, usernameFromEmail, type Permission } from '../lib/constants';
 import type { UserProfile } from '../lib/types';
 
 /**
  * loading      : sedang memeriksa sesi
  * signed-out   : belum login
- * no-access    : login Google berhasil, tapi belum diundang Admin
+ * no-access    : login berhasil, tapi akun belum punya profil (bukan dibuat Admin)
  * inactive     : akun dinonaktifkan Admin
  * ready        : punya profil aktif
  */
@@ -26,36 +26,23 @@ const AuthContext = createContext<AuthValue>({ state: 'loading', user: null, pro
 export const useAuth = () => useContext(AuthContext);
 
 /**
- * Buat profil saat login pertama. Role TIDAK ditentukan client:
- * rules hanya menerima role dari undangan Admin (atau 'Admin' untuk bootstrap admin).
+ * Profil untuk admin pertama. Akun user lain dibuat oleh Admin lengkap dengan profilnya,
+ * jadi hanya bootstrap admin yang membuat profilnya sendiri. Role tidak pernah
+ * ditentukan client: rules hanya menerima role 'Admin' untuk username bootstrap.
  */
-async function claimProfile(user: User): Promise<boolean> {
+async function claimBootstrapProfile(user: User): Promise<boolean> {
   const email = (user.email || '').toLowerCase();
-  if (!email) return false;
-
-  const base = {
+  if (email !== BOOTSTRAP_ADMIN_EMAIL) return false;
+  await setDoc(doc(db, 'users', user.uid), {
     email,
-    displayName: user.displayName || email.split('@')[0],
+    username: BOOTSTRAP_ADMIN_USERNAME,
+    displayName: 'Administrator',
+    role: 'Admin',
     status: 'Active',
+    mustChangePassword: false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  };
-  const batch = writeBatch(db);
-  const profileRef = doc(db, 'users', user.uid);
-
-  if (email === BOOTSTRAP_ADMIN_EMAIL) {
-    batch.set(profileRef, { ...base, role: 'Admin' });
-    await batch.commit();
-    return true;
-  }
-
-  const inviteRef = doc(db, 'invites', email);
-  const invite = await getDoc(inviteRef);
-  if (!invite.exists()) return false;
-
-  batch.set(profileRef, { ...base, displayName: user.displayName || invite.data().displayName || base.displayName, role: invite.data().role });
-  batch.delete(inviteRef);
-  await batch.commit();
+  });
   return true;
 }
 
@@ -72,6 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubProfile = undefined;
       setUser(current);
       setProfile(null);
+      setActorName('');
 
       if (!current) {
         setState('signed-out');
@@ -82,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const profileRef = doc(db, 'users', current.uid);
         const existing = await getDoc(profileRef);
-        if (!existing.exists() && !(await claimProfile(current))) {
+        if (!existing.exists() && !(await claimBootstrapProfile(current))) {
           setState('no-access');
           return;
         }
@@ -97,6 +85,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               return;
             }
             const data = { id: snap.id, ...snap.data() } as UserProfile;
+            setActorName(data.displayName || data.username || usernameFromEmail(data.email));
             setProfile(data);
             setState(data.status === 'Inactive' ? 'inactive' : 'ready');
           },

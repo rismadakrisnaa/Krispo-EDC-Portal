@@ -417,11 +417,12 @@
     },
     "userProfile": {
       "title": "User Profile",
-      "description": "Application user role and metadata.",
+      "description": "Application user. Login is username + password; email is the internal login email username@krispo-edc.local.",
       "type": "object",
       "properties": {
         "email": {
-          "type": "string"
+          "type": "string",
+          "description": "Internal login email (username@krispo-edc.local)"
         },
         "role": {
           "type": "string",
@@ -443,10 +444,19 @@
             "Active",
             "Inactive"
           ]
+        },
+        "username": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,31}$"
+        },
+        "mustChangePassword": {
+          "type": "boolean",
+          "description": "User must replace the temporary password on next login"
         }
       },
       "required": [
         "email",
+        "username",
         "role",
         "status"
       ]
@@ -469,41 +479,6 @@
       "required": [
         "name",
         "price"
-      ]
-    },
-    "invite": {
-      "title": "User Invite",
-      "description": "Pre-registration of a user by an Admin. Document id is the lowercased email. Claimed (and deleted) on first login.",
-      "type": "object",
-      "properties": {
-        "email": {
-          "type": "string"
-        },
-        "displayName": {
-          "type": "string"
-        },
-        "role": {
-          "type": "string",
-          "enum": [
-            "Admin",
-            "Operations",
-            "Warehouse",
-            "Service",
-            "Account Manager",
-            "Management"
-          ]
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "createdBy": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "email",
-        "role"
       ]
     }
   },
@@ -535,10 +510,6 @@
     "edc_parts/{partId}": {
       "schema": "edcPart",
       "description": "Master list of parts"
-    },
-    "invites/{email}": {
-      "schema": "invite",
-      "description": "Pending user invitations (Admin only)"
     }
   }
 }

@@ -114,15 +114,12 @@ export interface Movement {
 
 export interface UserProfile {
   id: string;
+  /** Email login internal (username@domain). */
   email: string;
+  username?: string;
   displayName?: string;
   role: string;
   status?: 'Active' | 'Inactive';
-}
-
-export interface Invite {
-  id: string;
-  email: string;
-  displayName?: string;
-  role: string;
+  /** true = user wajib mengganti password sementara saat login berikutnya. */
+  mustChangePassword?: boolean;
 }
